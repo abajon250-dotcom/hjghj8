@@ -442,9 +442,19 @@ user_game_data = {}
 
 # ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
+# ... после bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========== МИДЛВАРЬ ДЛЯ ПРОВЕРКИ ПОДПИСКИ НА КАНАЛ ==========
+async def is_subscribed_to_channel(user_id: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
+# ========== МИДЛВАРЬ ==========
 @dp.callback_query(lambda c: c.data not in ["check_sub"])
 async def subscription_middleware(callback: types.CallbackQuery):
     if not await is_subscribed_to_channel(callback.from_user.id):
@@ -454,6 +464,7 @@ async def subscription_middleware(callback: types.CallbackQuery):
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
+    # ... (остаётся как у тебя)
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
