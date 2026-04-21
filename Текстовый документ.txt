@@ -1,0 +1,1574 @@
+import asyncio
+import sqlite3
+import time
+import random
+import os
+from datetime import datetime
+import aiohttp
+import json
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command
+
+from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
+import vk_api
+
+# ==================== КОНФИГУРАЦИЯ ====================
+BOT_TOKEN = "8739330551:AAFaQFnswNzYCnBvgpp0gDcw3hZlBTI3sQ0"
+API_ID = 37518219
+API_HASH = "c1b096d4133588d0b1a59b634e696861"
+ADMIN_ID = 6484109563
+CRYPTOBOT_TOKEN = "570860:AA7AZyjbAjcDj1yMG19afkT4bOgwYAAQUSI"
+
+# ==================== ТАРИФЫ ПОДПИСКИ ====================
+TARIFFS = {
+    "day": {"days": 1, "price": 5, "name": "1 день"},
+    "week": {"days": 7, "price": 30, "name": "1 неделя"},
+    "month": {"days": 30, "price": 100, "name": "1 месяц"}
+}
+
+# ==================== БАЗА ДАННЫХ ====================
+DB_PATH = "bot.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        tg_id INTEGER PRIMARY KEY,
+        username TEXT,
+        sub_until INTEGER DEFAULT 0,
+        balance REAL DEFAULT 100,
+        total_bet REAL DEFAULT 0,
+        total_win REAL DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS tg_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_tg_id INTEGER,
+        phone TEXT,
+        session_file TEXT,
+        is_active INTEGER DEFAULT 1
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS vk_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_tg_id INTEGER,
+        token TEXT,
+        vk_user_id INTEGER,
+        vk_name TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        amount REAL,
+        wallet TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        name TEXT,
+        content TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+def get_user(tg_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT tg_id, username, sub_until, balance, total_bet, total_win FROM users WHERE tg_id=?", (tg_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"tg_id": row[0], "username": row[1], "sub_until": row[2] or 0, "balance": row[3], "total_bet": row[4], "total_win": row[5]}
+    return None
+
+def create_user(tg_id, username):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (tg_id, username, sub_until, balance, total_bet, total_win) VALUES (?, ?, 0, 100, 0, 0)", (tg_id, username))
+    conn.commit()
+    conn.close()
+
+def is_subscribed(tg_id):
+    user = get_user(tg_id)
+    if not user: return False
+    return user["sub_until"] > int(time.time())
+
+def set_subscription(tg_id, days):
+    new_time = int(time.time()) + days * 86400
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET sub_until=? WHERE tg_id=?", (new_time, tg_id))
+    conn.commit()
+    conn.close()
+
+def get_balance(tg_id):
+    user = get_user(tg_id)
+    return user["balance"] if user else 0
+
+def update_balance(tg_id, delta, bet=0, win=0):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance = balance + ?, total_bet = total_bet + ?, total_win = total_win + ? WHERE tg_id=?", (delta, bet, win, tg_id))
+    conn.commit()
+    conn.close()
+
+def set_balance(tg_id, new_balance):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance = ? WHERE tg_id=?", (new_balance, tg_id))
+    conn.commit()
+    conn.close()
+
+def add_tg_account(owner_tg_id, phone, session_file):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO tg_accounts (owner_tg_id, phone, session_file) VALUES (?,?,?)", (owner_tg_id, phone, session_file))
+    conn.commit()
+    conn.close()
+
+def get_active_tg_account(owner_tg_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE owner_tg_id=? AND is_active=1 ORDER BY id DESC LIMIT 1", (owner_tg_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"session_file": row[0], "phone": row[1]}
+    return None
+
+def deactivate_tg_account(owner_tg_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE tg_accounts SET is_active=0 WHERE owner_tg_id=?", (owner_tg_id,))
+    conn.commit()
+    conn.close()
+
+def add_vk_account(owner_tg_id, token, vk_user_id, vk_name):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO vk_accounts (owner_tg_id, token, vk_user_id, vk_name) VALUES (?,?,?,?)", (owner_tg_id, token, vk_user_id, vk_name))
+    conn.commit()
+    conn.close()
+
+def get_active_vk_account(owner_tg_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT token, vk_name FROM vk_accounts WHERE owner_tg_id=? ORDER BY id DESC LIMIT 1", (owner_tg_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"token": row[0], "vk_name": row[1]}
+    return None
+
+def delete_vk_account(owner_tg_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM vk_accounts WHERE owner_tg_id=?", (owner_tg_id,))
+    conn.commit()
+    conn.close()
+
+def get_all_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT tg_id, username, sub_until, balance FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return [{"tg_id": r[0], "username": r[1], "sub_until": r[2] or 0, "balance": r[3]} for r in rows]
+
+def add_withdraw_request(user_id, amount, wallet):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO withdraw_requests (user_id, amount, wallet, created_at) VALUES (?,?,?,?)", (user_id, amount, wallet, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def get_pending_withdraws():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, amount, wallet, created_at FROM withdraw_requests WHERE status='pending'")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def update_withdraw_status(req_id, status):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE withdraw_requests SET status=? WHERE id=?", (status, req_id))
+    conn.commit()
+    conn.close()
+
+def get_user_templates(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, name, content FROM templates WHERE user_id=?", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1], "content": r[2]} for r in rows]
+
+def add_template(user_id, name, content):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO templates (user_id, name, content) VALUES (?,?,?)", (user_id, name, content))
+    conn.commit()
+    conn.close()
+
+def delete_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM templates WHERE id=?", (template_id,))
+    conn.commit()
+    conn.close()
+
+# ==================== CRYPTOBOT ====================
+CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
+
+async def create_crypto_invoice(amount_usd: float, description: str):
+    url = f"{CRYPTOBOT_API_URL}/createInvoice"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    payload = {
+        "asset": "USDT",
+        "amount": str(amount_usd),
+        "description": description,
+        "paid_btn_name": "callback",
+        "paid_btn_url": "https://t.me/YOUR_BOT_USERNAME"  # замените
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                data = await resp.json()
+                if data.get("ok"):
+                    return {"pay_url": data["result"]["pay_url"], "invoice_id": data["result"]["invoice_id"]}
+                return None
+    except:
+        return None
+
+async def check_crypto_invoice(invoice_id: str):
+    url = f"{CRYPTOBOT_API_URL}/getInvoices"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
+    params = {"invoice_ids": invoice_id}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as resp:
+                data = await resp.json()
+                if data.get("ok") and data["result"]["items"]:
+                    return data["result"]["items"][0]["status"]
+                return None
+    except:
+        return None
+
+# ==================== КЛАВИАТУРЫ ====================
+def main_menu(tg_id):
+    buttons = [
+        [InlineKeyboardButton(text="🎲 Играть", callback_data="casino_main")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+         InlineKeyboardButton(text="👥 Реф. программа", callback_data="referral")],
+        [InlineKeyboardButton(text="🔧 Управление аккаунтами", callback_data="manage_accounts")]
+    ]
+    if tg_id == ADMIN_ID:
+        buttons.append([InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def casino_main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 куб", callback_data="game_1cube"),
+         InlineKeyboardButton(text="2 куба", callback_data="game_2cube"),
+         InlineKeyboardButton(text="3 куба", callback_data="game_3cube")],
+        [InlineKeyboardButton(text="На число", callback_data="game_number"),
+         InlineKeyboardButton(text="Числа", callback_data="game_numbers"),
+         InlineKeyboardButton(text="Нет числа", callback_data="game_no_number")],
+        [InlineKeyboardButton(text="+7", callback_data="game_plus7"),
+         InlineKeyboardButton(text="18/36", callback_data="game_18_36")],
+        [InlineKeyboardButton(text="🎲 Мини-игры", callback_data="mini_games")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
+
+def mini_games_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💣 Мины", callback_data="game_mines"),
+         InlineKeyboardButton(text="☂️ Зонтик", callback_data="game_umbrella")],
+        [InlineKeyboardButton(text="🎰 Кено", callback_data="game_keno"),
+         InlineKeyboardButton(text="🎰 Автомат", callback_data="game_slots")],
+        [InlineKeyboardButton(text="🐋 Кит", callback_data="game_whale")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="casino_main")]
+    ])
+
+def multiplier_menu(game_name):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="x2", callback_data=f"mult_{game_name}_2"),
+         InlineKeyboardButton(text="x3", callback_data=f"mult_{game_name}_3"),
+         InlineKeyboardButton(text="x4", callback_data=f"mult_{game_name}_4"),
+         InlineKeyboardButton(text="x5", callback_data=f"mult_{game_name}_5")],
+        [InlineKeyboardButton(text="x10", callback_data=f"mult_{game_name}_10"),
+         InlineKeyboardButton(text="x30", callback_data=f"mult_{game_name}_30"),
+         InlineKeyboardButton(text="x50", callback_data=f"mult_{game_name}_50"),
+         InlineKeyboardButton(text="x100", callback_data=f"mult_{game_name}_100")],
+        [InlineKeyboardButton(text="⚡ Турбо", callback_data=f"mult_{game_name}_turbo")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="casino_main")]
+    ])
+
+def back_button(callback_data):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=callback_data)]
+    ])
+
+def manage_accounts_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Мои Telegram аккаунты", callback_data="view_tg_accounts")],
+        [InlineKeyboardButton(text="📘 Мои VK аккаунты", callback_data="view_vk_accounts")],
+        [InlineKeyboardButton(text="➕ Подключить новый", callback_data="connect_accounts")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
+
+def templates_menu_keyboard(user_id):
+    templates = get_user_templates(user_id)
+    kb = []
+    for t in templates:
+        kb.append([InlineKeyboardButton(text=f"📄 {t['name']}", callback_data=f"use_template_{t['id']}")])
+    kb.append([InlineKeyboardButton(text="➕ Создать шаблон", callback_data="create_template")])
+    kb.append([InlineKeyboardButton(text="🗑 Удалить шаблон", callback_data="delete_template")])
+    kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accounts")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def admin_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"),
+         InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
+        [InlineKeyboardButton(text="📢 Глобал рассылка", callback_data="admin_broadcast"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="💰 Заявки на вывод", callback_data="admin_withdraws")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="main_menu")]
+    ])
+
+# ==================== FSM ====================
+class AddTGStates(StatesGroup):
+    waiting_phone = State()
+    waiting_code = State()
+    waiting_2fa = State()
+
+class AddVKStates(StatesGroup):
+    waiting_token = State()
+
+class BroadcastSettings(StatesGroup):
+    waiting_delay = State()
+    waiting_text = State()
+    waiting_target = State()
+
+class TemplateStates(StatesGroup):
+    waiting_name = State()
+    waiting_content = State()
+    waiting_delete = State()
+
+class AdminAddBalance(StatesGroup):
+    waiting_user_id = State()
+    waiting_amount = State()
+
+class AdminRemoveBalance(StatesGroup):
+    waiting_user_id = State()
+    waiting_amount = State()
+
+class AdminBroadcast(StatesGroup):
+    waiting_text = State()
+
+class WithdrawAmount(StatesGroup):
+    waiting_amount = State()
+    waiting_wallet = State()
+
+class DepositAmount(StatesGroup):
+    waiting_amount = State()
+
+class BetAmount(StatesGroup):
+    waiting_bet = State()
+
+class MinesGame(StatesGroup):
+    waiting_bet = State()
+    waiting_mines_count = State()
+    waiting_field = State()
+
+class SlotsGame(StatesGroup):
+    waiting_bet = State()
+    waiting_combination = State()
+
+# ==================== БОТ ====================
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+# ==================== ОСНОВНЫЕ ХЕНДЛЕРЫ ====================
+@dp.message(Command("start"))
+async def start_cmd(message: Message):
+    create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
+    await message.answer("🎲 *Добро пожаловать!*", parse_mode="Markdown", reply_markup=main_menu(message.from_user.id))
+
+@dp.callback_query(F.data == "main_menu")
+async def back_to_main(callback: CallbackQuery):
+    await callback.message.edit_text("🎲 *Главное меню*", parse_mode="Markdown", reply_markup=main_menu(callback.from_user.id))
+    await callback.answer()
+
+@dp.callback_query(F.data == "profile")
+async def profile(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    balance = user["balance"]
+    total_bet = user["total_bet"]
+    total_win = user["total_win"]
+    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y %H:%M') if user["sub_until"] else "Нет"
+    text = f"👤 *Профиль*\n\n💰 Баланс: {balance:.2f} 🎲\n📊 Ставок: {total_bet:.2f}\n🏆 Выигрыш: {total_win:.2f}\n⏳ Подписка до: {sub_until}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"),
+         InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw")],
+        [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data == "referral")
+async def referral(callback: CallbackQuery):
+    text = f"👥 *Рефералка*\n\nПриглашай друзей: https://t.me/{BOT_TOKEN.split(':')[0]}?start={callback.from_user.id}"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_button("main_menu"))
+    await callback.answer()
+
+@dp.callback_query(F.data == "manage_accounts")
+async def manage_accounts(callback: CallbackQuery):
+    await callback.message.edit_text("🔧 *Управление аккаунтами*", parse_mode="Markdown", reply_markup=manage_accounts_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "view_tg_accounts")
+async def view_tg_accounts(callback: CallbackQuery):
+    tg_acc = get_active_tg_account(callback.from_user.id)
+    if not tg_acc:
+        await callback.answer("❌ Telegram аккаунт не подключён", show_alert=True)
+        return
+    phone = tg_acc["phone"]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data="delete_tg_account")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="manage_accounts")]
+    ])
+    await callback.message.edit_text(f"📱 *Telegram аккаунт*\nНомер: {phone}\nСтатус: активен", parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data == "view_vk_accounts")
+async def view_vk_accounts(callback: CallbackQuery):
+    vk_acc = get_active_vk_account(callback.from_user.id)
+    if not vk_acc:
+        await callback.answer("❌ VK аккаунт не подключён", show_alert=True)
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data="delete_vk_account")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="manage_accounts")]
+    ])
+    await callback.message.edit_text(f"📘 *VK аккаунт*\nИмя: {vk_acc['vk_name']}\nСтатус: активен", parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data == "delete_tg_account")
+async def delete_tg_account(callback: CallbackQuery):
+    deactivate_tg_account(callback.from_user.id)
+    await callback.answer("✅ Telegram аккаунт удалён", show_alert=True)
+    await manage_accounts(callback)
+
+@dp.callback_query(F.data == "delete_vk_account")
+async def delete_vk_account(callback: CallbackQuery):
+    delete_vk_account(callback.from_user.id)
+    await callback.answer("✅ VK аккаунт удалён", show_alert=True)
+    await manage_accounts(callback)
+
+@dp.callback_query(F.data == "connect_accounts")
+async def connect_accounts_menu(callback: CallbackQuery):
+    if not is_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна платная подписка!", show_alert=True)
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Подключить Telegram", callback_data="add_tg"),
+         InlineKeyboardButton(text="📘 Подключить VK", callback_data="add_vk")],
+        [InlineKeyboardButton(text="📨 Рассылка", callback_data="start_broadcast")],
+        [InlineKeyboardButton(text="📝 Мои шаблоны", callback_data="templates")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="manage_accounts")]
+    ])
+    await callback.message.edit_text("🔧 *Подключение и рассылки*", parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+# ==================== ПОДПИСКА (ТАРИФЫ) ====================
+@dp.callback_query(F.data == "buy_sub")
+async def choose_tariff(callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 день - 5$", callback_data="tariff_day")],
+        [InlineKeyboardButton(text="1 неделя - 30$", callback_data="tariff_week")],
+        [InlineKeyboardButton(text="1 месяц - 100$", callback_data="tariff_month")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="profile")]
+    ])
+    await callback.message.edit_text("💎 *Выберите тариф подписки:*", parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("tariff_"))
+async def process_tariff(callback: CallbackQuery):
+    tariff_key = callback.data.split("_")[1]
+    tariff = TARIFFS[tariff_key]
+    amount = tariff["price"]
+    days = tariff["days"]
+    description = f"Подписка на {tariff['name']}"
+    invoice = await create_crypto_invoice(amount, description)
+    if not invoice:
+        await callback.message.answer("❌ Ошибка создания счёта", reply_markup=back_button("profile"))
+        await callback.answer()
+        return
+    pay_url = invoice["pay_url"]
+    invoice_id = invoice["invoice_id"]
+    if not hasattr(process_tariff, "pending_invoices"):
+        process_tariff.pending_invoices = {}
+    process_tariff.pending_invoices[callback.from_user.id] = {"invoice_id": invoice_id, "days": days}
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💸 Оплатить", url=pay_url)],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_sub_payment_{invoice_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="profile")]
+    ])
+    await callback.message.answer(
+        f"💳 *Оплата подписки*\nТариф: {tariff['name']}\nСумма: {amount} USDT",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("check_sub_payment_"))
+async def check_sub_payment(callback: CallbackQuery):
+    invoice_id = callback.data.split("_")[3]
+    status = await check_crypto_invoice(invoice_id)
+    if status == "paid":
+        pending = getattr(process_tariff, "pending_invoices", {})
+        days = pending.get(callback.from_user.id, {}).get("days", 1)
+        set_subscription(callback.from_user.id, days)
+        if callback.from_user.id in pending:
+            del pending[callback.from_user.id]
+        await callback.message.edit_text(f"✅ Подписка активирована на {days} дней!", reply_markup=main_menu(callback.from_user.id))
+    elif status == "pending":
+        await callback.answer("⏳ Платёж ещё не обработан", show_alert=True)
+    else:
+        await callback.answer("❌ Ошибка проверки", show_alert=True)
+    await callback.answer()
+
+# ==================== ПОПОЛНЕНИЕ / ВЫВОД ====================
+@dp.callback_query(F.data == "deposit")
+async def deposit_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("💰 Сумма пополнения (мин 1$):")
+    await state.set_state(DepositAmount.waiting_amount)
+    await callback.answer()
+
+@dp.message(DepositAmount.waiting_amount)
+async def deposit_amount(message: Message, state: FSMContext):
+    try:
+        raw = message.text.strip()
+        clean = ''.join(c for c in raw if c.isdigit() or c=='.')
+        amount = float(clean)
+        if amount < 1:
+            await message.answer("❌ Мин 1$")
+            return
+        invoice = await create_crypto_invoice(amount, f"Пополнение баланса на {amount} монет")
+        if not invoice:
+            await message.answer("❌ Ошибка создания счёта")
+            return
+        pay_url = invoice["pay_url"]
+        invoice_id = invoice["invoice_id"]
+        if not hasattr(deposit_amount, "pending_deposits"):
+            deposit_amount.pending_deposits = {}
+        deposit_amount.pending_deposits[message.from_user.id] = {"invoice_id": invoice_id, "amount": amount}
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💸 Оплатить", url=pay_url)],
+            [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_dep_payment_{invoice_id}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="profile")]
+        ])
+        await message.answer(f"💳 Счёт на {amount} USDT", reply_markup=keyboard)
+    except:
+        await message.answer("❌ Введите число")
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("check_dep_payment_"))
+async def check_dep_payment(callback: CallbackQuery):
+    invoice_id = callback.data.split("_")[3]
+    status = await check_crypto_invoice(invoice_id)
+    if status == "paid":
+        pending = getattr(deposit_amount, "pending_deposits", {})
+        if callback.from_user.id in pending:
+            amount = pending[callback.from_user.id]["amount"]
+            update_balance(callback.from_user.id, amount, 0, 0)
+            del pending[callback.from_user.id]
+            await callback.message.edit_text(f"✅ Пополнение на {amount} монет успешно!", reply_markup=main_menu(callback.from_user.id))
+        else:
+            await callback.message.edit_text("❌ Не найдена информация о платеже", reply_markup=main_menu(callback.from_user.id))
+    elif status == "pending":
+        await callback.answer("⏳ Платёж ещё не обработан", show_alert=True)
+    else:
+        await callback.answer("❌ Ошибка проверки", show_alert=True)
+    await callback.answer()
+
+@dp.callback_query(F.data == "withdraw")
+async def withdraw_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("💰 Сумма вывода (мин 10):")
+    await state.set_state(WithdrawAmount.waiting_amount)
+    await callback.answer()
+
+@dp.message(WithdrawAmount.waiting_amount)
+async def withdraw_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        if amount < 10:
+            await message.answer("❌ Мин 10")
+            return
+        if amount > get_balance(message.from_user.id):
+            await message.answer("❌ Не хватает")
+            return
+        await state.update_data(amount=amount)
+        await message.answer("💳 Адрес кошелька USDT TRC20:")
+        await state.set_state(WithdrawAmount.waiting_wallet)
+    except:
+        await message.answer("❌ Введите число")
+
+@dp.message(WithdrawAmount.waiting_wallet)
+async def withdraw_wallet(message: Message, state: FSMContext):
+    wallet = message.text.strip()
+    data = await state.get_data()
+    amount = data["amount"]
+    add_withdraw_request(message.from_user.id, amount, wallet)
+    await message.answer(f"✅ Заявка на {amount} монет создана", reply_markup=back_button("main_menu"))
+    await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}\nКошелёк: {wallet}")
+    await state.clear()
+
+# ==================== ПОДКЛЮЧЕНИЕ TG/VK ====================
+@dp.callback_query(F.data == "add_tg")
+async def start_add_tg(callback: CallbackQuery, state: FSMContext):
+    if not is_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна подписка", show_alert=True)
+        return
+    await callback.message.answer("📞 Введите номер +79991234567:")
+    await state.set_state(AddTGStates.waiting_phone)
+    await callback.answer()
+
+@dp.message(AddTGStates.waiting_phone)
+async def get_phone(message: Message, state: FSMContext):
+    phone = message.text.strip()
+    session_file = f"sessions/{message.from_user.id}_{phone}.session"
+    os.makedirs("sessions", exist_ok=True)
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.send_code_request(phone)
+        await state.update_data(phone=phone, session_file=session_file, client=client)
+        await message.answer("🔑 Введите код из SMS:")
+        await state.set_state(AddTGStates.waiting_code)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+        await state.clear()
+
+@dp.message(AddTGStates.waiting_code)
+async def get_code(message: Message, state: FSMContext):
+    code = message.text.strip()
+    data = await state.get_data()
+    client = data["client"]
+    phone = data["phone"]
+    try:
+        await client.sign_in(phone, code)
+        add_tg_account(message.from_user.id, phone, data["session_file"])
+        await message.answer("✅ Telegram подключён!", reply_markup=back_button("connect_accounts"))
+        await state.clear()
+    except SessionPasswordNeededError:
+        await message.answer("🔒 Введите 2FA пароль:")
+        await state.set_state(AddTGStates.waiting_2fa)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+        await state.clear()
+
+@dp.message(AddTGStates.waiting_2fa)
+async def get_2fa(message: Message, state: FSMContext):
+    password = message.text.strip()
+    data = await state.get_data()
+    client = data["client"]
+    try:
+        await client.sign_in(password=password)
+        add_tg_account(message.from_user.id, data["phone"], data["session_file"])
+        await message.answer("✅ Telegram с 2FA подключён!")
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка 2FA: {e}")
+        await state.clear()
+
+@dp.callback_query(F.data == "add_vk")
+async def start_add_vk(callback: CallbackQuery, state: FSMContext):
+    if not is_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна подписка", show_alert=True)
+        return
+    await callback.message.answer("🔑 Введите токен VK:")
+    await state.set_state(AddVKStates.waiting_token)
+    await callback.answer()
+
+@dp.message(AddVKStates.waiting_token)
+async def get_vk_token(message: Message, state: FSMContext):
+    token = message.text.strip()
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        user = vk.users.get()[0]
+        name = f"{user['first_name']} {user['last_name']}"
+        add_vk_account(message.from_user.id, token, user['id'], name)
+        await message.answer(f"✅ VK {name} подключён!", reply_markup=back_button("connect_accounts"))
+    except:
+        await message.answer("❌ Неверный токен")
+    await state.clear()
+
+# ==================== ШАБЛОНЫ ====================
+@dp.callback_query(F.data == "templates")
+async def templates_list(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    kb = templates_menu_keyboard(user_id)
+    await callback.message.edit_text("📝 *Ваши шаблоны*", parse_mode="Markdown", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "create_template")
+async def create_template_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите название шаблона:")
+    await state.set_state(TemplateStates.waiting_name)
+    await callback.answer()
+
+@dp.message(TemplateStates.waiting_name)
+async def get_template_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    await state.update_data(template_name=name)
+    await message.answer("Введите текст шаблона (можно с Markdown):")
+    await state.set_state(TemplateStates.waiting_content)
+
+@dp.message(TemplateStates.waiting_content)
+async def get_template_content(message: Message, state: FSMContext):
+    content = message.text
+    data = await state.get_data()
+    name = data["template_name"]
+    add_template(message.from_user.id, name, content)
+    await message.answer(f"✅ Шаблон '{name}' сохранён!", reply_markup=back_button("templates"))
+    await state.clear()
+
+@dp.callback_query(F.data == "delete_template")
+async def delete_template_start(callback: CallbackQuery, state: FSMContext):
+    templates = get_user_templates(callback.from_user.id)
+    if not templates:
+        await callback.answer("Нет шаблонов", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"❌ {t['name']}", callback_data=f"del_template_{t['id']}")] for t in templates] + [[InlineKeyboardButton(text="🔙 Назад", callback_data="templates")]])
+    await callback.message.edit_text("Выберите шаблон для удаления:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_template_"))
+async def delete_template_exec(callback: CallbackQuery):
+    tid = int(callback.data.split("_")[2])
+    delete_template(tid)
+    await callback.answer("Шаблон удалён", show_alert=True)
+    await templates_list(callback)
+
+@dp.callback_query(F.data.startswith("use_template_"))
+async def use_template(callback: CallbackQuery, state: FSMContext):
+    tid = int(callback.data.split("_")[2])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT content FROM templates WHERE id=?", (tid,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        await state.update_data(broadcast_text=row[0])
+        await ask_delay(callback, state)
+    else:
+        await callback.answer("Шаблон не найден", show_alert=True)
+
+# ==================== РАССЫЛКА С ЗАДЕРЖКОЙ ====================
+async def ask_delay(callback: CallbackQuery, state: FSMContext):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="0.5 сек", callback_data="delay_0.5"),
+         InlineKeyboardButton(text="1 сек", callback_data="delay_1")],
+        [InlineKeyboardButton(text="2 сек", callback_data="delay_2"),
+         InlineKeyboardButton(text="5 сек", callback_data="delay_5")],
+        [InlineKeyboardButton(text="Своё значение", callback_data="delay_custom")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accounts")]
+    ])
+    await callback.message.edit_text("⏱ *Выберите задержку между сообщениями* (в секундах):", parse_mode="Markdown", reply_markup=keyboard)
+    await state.set_state(BroadcastSettings.waiting_delay)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("delay_"))
+async def set_delay(callback: CallbackQuery, state: FSMContext):
+    val = callback.data.split("_")[1]
+    if val == "custom":
+        await callback.message.answer("Введите задержку в секундах (число, например 1.5):")
+        return
+    delay = float(val)
+    await state.update_data(delay=delay)
+    data = await state.get_data()
+    if "broadcast_text" in data:
+        await ask_target(callback, state, data["broadcast_text"], delay)
+    else:
+        await callback.message.answer("Введите текст рассылки:")
+        await state.set_state(BroadcastSettings.waiting_text)
+    await callback.answer()
+
+@dp.message(BroadcastSettings.waiting_delay)
+async def custom_delay(message: Message, state: FSMContext):
+    try:
+        delay = float(message.text.strip())
+        if delay < 0.1:
+            await message.answer("❌ Минимальная задержка 0.1 сек")
+            return
+        await state.update_data(delay=delay)
+        data = await state.get_data()
+        if "broadcast_text" in data:
+            await ask_target_from_message(message, state, data["broadcast_text"], delay)
+        else:
+            await message.answer("Введите текст рассылки:")
+            await state.set_state(BroadcastSettings.waiting_text)
+    except:
+        await message.answer("❌ Введите число, например 1.5")
+
+@dp.message(BroadcastSettings.waiting_text)
+async def get_broadcast_text(message: Message, state: FSMContext):
+    text = message.text
+    data = await state.get_data()
+    delay = data.get("delay", 0.5)
+    await ask_target_from_message(message, state, text, delay)
+
+async def ask_target(callback: CallbackQuery, state: FSMContext, text: str, delay: float):
+    await state.update_data(broadcast_text=text, delay=delay)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Telegram", callback_data="broadcast_target_tg"),
+         InlineKeyboardButton(text="📘 VK", callback_data="broadcast_target_vk")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accounts")]
+    ])
+    await callback.message.edit_text("Куда отправить рассылку?", reply_markup=keyboard)
+
+async def ask_target_from_message(message: Message, state: FSMContext, text: str, delay: float):
+    await state.update_data(broadcast_text=text, delay=delay)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Telegram", callback_data="broadcast_target_tg"),
+         InlineKeyboardButton(text="📘 VK", callback_data="broadcast_target_vk")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="connect_accounts")]
+    ])
+    await message.answer("Куда отправить рассылку?", reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("broadcast_target_"))
+async def start_broadcast(callback: CallbackQuery, state: FSMContext):
+    target = callback.data.split("_")[2]
+    data = await state.get_data()
+    text = data["broadcast_text"]
+    delay = data["delay"]
+    user_id = callback.from_user.id
+    if target == "tg":
+        tg_acc = get_active_tg_account(user_id)
+        if not tg_acc:
+            await callback.answer("❌ Сначала подключите Telegram аккаунт", show_alert=True)
+            return
+        await callback.message.answer("🚀 Начинаю рассылку в Telegram...")
+        await run_tg_broadcast(user_id, text, delay, callback.message.chat.id)
+    elif target == "vk":
+        vk_acc = get_active_vk_account(user_id)
+        if not vk_acc:
+            await callback.answer("❌ Сначала подключите VK аккаунт", show_alert=True)
+            return
+        await callback.message.answer("🚀 Начинаю рассылку в VK...")
+        await run_vk_broadcast(user_id, text, delay, callback.message.chat.id)
+    await state.clear()
+    await callback.answer()
+
+async def run_tg_broadcast(user_id, text, delay, chat_id):
+    tg_acc = get_active_tg_account(user_id)
+    if not tg_acc:
+        await bot.send_message(chat_id, "❌ Аккаунт не найден")
+        return
+    client = TelegramClient(tg_acc["session_file"], API_ID, API_HASH)
+    await client.connect()
+    dialogs = await client.get_dialogs()
+    targets = [d for d in dialogs if d.is_user or d.is_group or d.is_channel]
+    total = len(targets)
+    await bot.send_message(chat_id, f"📨 Найдено {total} получателей. Задержка {delay} сек.")
+    sent = 0
+    for i, dialog in enumerate(targets):
+        try:
+            await client.send_message(dialog.entity, text)
+            sent += 1
+            await asyncio.sleep(delay)
+            if (i+1) % 10 == 0:
+                await bot.send_message(chat_id, f"📊 Прогресс: {sent}/{total}")
+        except:
+            pass
+    await client.disconnect()
+    await bot.send_message(chat_id, f"✅ Рассылка завершена. Отправлено {sent} из {total}.")
+
+async def run_vk_broadcast(user_id, text, delay, chat_id):
+    vk_acc = get_active_vk_account(user_id)
+    if not vk_acc:
+        await bot.send_message(chat_id, "❌ Аккаунт не найден")
+        return
+    vk_session = vk_api.VkApi(token=vk_acc["token"])
+    vk = vk_session.get_api()
+    friends = vk.friends.get()["items"]
+    convs = vk.messages.getConversations(count=200)["items"]
+    targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
+    total = len(targets)
+    await bot.send_message(chat_id, f"📨 Найдено {total} получателей. Задержка {delay} сек.")
+    sent = 0
+    for i, target in enumerate(targets):
+        try:
+            if isinstance(target, int):
+                vk.messages.send(user_id=target, message=text, random_id=0)
+            else:
+                vk.messages.send(peer_id=target, message=text, random_id=0)
+            sent += 1
+            await asyncio.sleep(delay)
+            if (i+1) % 10 == 0:
+                await bot.send_message(chat_id, f"📊 Прогресс: {sent}/{total}")
+        except:
+            pass
+    await bot.send_message(chat_id, f"✅ Рассылка завершена. Отправлено {sent} из {total}.")
+
+# ==================== КАЗИНО (ИГРЫ) ====================
+# --- Вспомогательные функции для кубиков с анимацией ---
+async def throw_dice(chat_id, count=1):
+    values = []
+    for _ in range(count):
+        msg = await bot.send_dice(chat_id, emoji="🎲")
+        values.append(msg.dice.value)
+        if count > 1:
+            await asyncio.sleep(0.6)
+    return values
+
+# --- Игры с кубиками ---
+async def play_1cube(user_id, bet, mult, chat_id):
+    roll = (await throw_dice(chat_id, 1))[0]
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    win = roll >= 4
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 Выпало {roll}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 Выпало {roll}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_2cube(user_id, bet, mult, chat_id):
+    rolls = await throw_dice(chat_id, 2)
+    total = sum(rolls)
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    win = total > 7
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 {rolls[0]}+{rolls[1]}={total}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 {rolls[0]}+{rolls[1]}={total}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_3cube(user_id, bet, mult, chat_id):
+    rolls = await throw_dice(chat_id, 3)
+    total = sum(rolls)
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    win = total > 10
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 {rolls[0]}+{rolls[1]}+{rolls[2]}={total}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 {rolls[0]}+{rolls[1]}+{rolls[2]}={total}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_number(user_id, bet, mult, chat_id):
+    rolls = await throw_dice(chat_id, 2)
+    total = sum(rolls)
+    target = random.randint(2,12)
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    win = random.random() < (1/coeff if mult != "turbo" else 0.5)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 Загадано {target}, выпало {total}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 Загадано {target}, выпало {total}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_numbers(user_id, bet, mult, chat_id):
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    win = random.random() < (1/coeff if mult != "turbo" else 0.5)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_no_number(user_id, bet, mult, chat_id):
+    roll = (await throw_dice(chat_id, 1))[0]
+    forbidden = random.randint(1,6)
+    win = roll != forbidden
+    coeff = 1.5 if mult == "turbo" else int(mult)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 Запрещено {forbidden}, выпало {roll}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 Запрещено {forbidden}, выпало {roll}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_plus7(user_id, bet, mult, chat_id):
+    rolls = await throw_dice(chat_id, 2)
+    total = sum(rolls)
+    win = total > 7
+    coeff = 2 if mult == "turbo" else int(mult)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 {rolls[0]}+{rolls[1]}={total} >7\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 {rolls[0]}+{rolls[1]}={total} <=7\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_18_36(user_id, bet, mult, chat_id):
+    # просто рандом без анимации
+    roll = random.randint(1,36)
+    win = roll >= 18
+    coeff = 2 if mult == "turbo" else int(mult)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎲 Выпало {roll}\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎲 Выпало {roll}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_umbrella(user_id, bet, mult, chat_id):
+    win = random.random() < 0.5
+    coeff = 2 if mult == "turbo" else int(mult)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"☂️ Дождь прошёл мимо\n✅ Выигрыш: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"☂️ Вы промокли\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_keno(user_id, bet, mult, chat_id):
+    chosen = random.randint(1,20)
+    drawn = random.randint(1,20)
+    win = chosen == drawn
+    coeff = 10 if mult == "turbo" else int(mult)
+    if win:
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🎰 Число {chosen}, выпало {drawn}\n✅ ДЖЕКПОТ: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🎰 Число {chosen}, выпало {drawn}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+async def play_whale(user_id, bet, mult, chat_id):
+    roll = random.randint(1,100)
+    if roll == 100:
+        coeff = 50 if mult == "turbo" else int(mult) if mult.isdigit() else 50
+        payout = bet * coeff
+        update_balance(user_id, payout, bet, payout)
+        return f"🐋 *КИТ!* Выпало 100!\n✅ ДЖЕКПОТ: {bet:.2f} x{coeff} = {payout:.2f} 🎲"
+    else:
+        update_balance(user_id, -bet, bet, 0)
+        return f"🐋 Выпало {roll}\n❌ Проигрыш: {bet:.2f} 🎲"
+
+# --- МИНЫ ---
+class MinesState(StatesGroup):
+    waiting_bet = State()
+    waiting_mines_count = State()
+    waiting_field = State()
+
+mines_games = {}  # user_id -> {"field": [[...]], "mines": set, "safe_cells": int, "bet": float, "multiplier": float}
+
+@dp.callback_query(F.data == "game_mines")
+async def mines_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("💰 Введите ставку (мин 0.1):")
+    await state.set_state(MinesState.waiting_bet)
+    await callback.answer()
+
+@dp.message(MinesState.waiting_bet)
+async def mines_bet(message: Message, state: FSMContext):
+    try:
+        bet = float(message.text.strip())
+        if bet < 0.1:
+            await message.answer("❌ Мин 0.1")
+            return
+        balance = get_balance(message.from_user.id)
+        if bet > balance:
+            await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}")
+            return
+        await state.update_data(bet=bet)
+        # Запрашиваем количество мин
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1 мина (x1.2)", callback_data="mines_count_1")],
+            [InlineKeyboardButton(text="2 мины (x1.5)", callback_data="mines_count_2")],
+            [InlineKeyboardButton(text="3 мины (x2)", callback_data="mines_count_3")],
+            [InlineKeyboardButton(text="5 мин (x3)", callback_data="mines_count_5")],
+            [InlineKeyboardButton(text="8 мин (x5)", callback_data="mines_count_8")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="casino_main")]
+        ])
+        await message.answer("💣 *Выберите количество мин*\nЧем больше мин, тем выше множитель.", parse_mode="Markdown", reply_markup=keyboard)
+        await state.set_state(MinesState.waiting_mines_count)
+    except:
+        await message.answer("❌ Введите число")
+
+@dp.callback_query(F.data.startswith("mines_count_"))
+async def mines_set_count(callback: CallbackQuery, state: FSMContext):
+    count = int(callback.data.split("_")[2])
+    multipliers = {1:1.2, 2:1.5, 3:2.0, 5:3.0, 8:5.0}
+    multiplier = multipliers.get(count, 1.5)
+    data = await state.get_data()
+    bet = data["bet"]
+    # Создаём поле 3x3
+    total_cells = 9
+    mine_positions = set(random.sample(range(9), count))
+    safe_cells = [i for i in range(9) if i not in mine_positions]
+    # Сохраняем игру
+    mines_games[callback.from_user.id] = {
+        "bet": bet,
+        "multiplier": multiplier,
+        "mines": mine_positions,
+        "safe_cells": set(safe_cells),
+        "opened": set(),
+        "count": count
+    }
+    # Показываем поле
+    await show_mines_field(callback.message, callback.from_user.id)
+    await state.clear()
+    await callback.answer()
+
+async def show_mines_field(message: types.Message, user_id):
+    game = mines_games.get(user_id)
+    if not game:
+        return
+    keyboard = []
+    for i in range(9):
+        if i in game["opened"]:
+            if i in game["mines"]:
+                symbol = "💣"
+            else:
+                symbol = "✅"
+        else:
+            symbol = "⬜"
+        row = i // 3
+        if len(keyboard) <= row:
+            keyboard.append([])
+        keyboard[row].append(InlineKeyboardButton(text=symbol, callback_data=f"mines_cell_{i}"))
+    keyboard.append([InlineKeyboardButton(text="🏆 Забрать выигрыш", callback_data="mines_cashout")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="casino_main")])
+    await message.edit_text(f"💣 *Мины* (мин: {game['count']}, множитель: x{game['multiplier']})\nВыберите клетку. Если откроете мину – проигрыш.", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+@dp.callback_query(F.data.startswith("mines_cell_"))
+async def mines_open_cell(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in mines_games:
+        await callback.answer("Игра не найдена", show_alert=True)
+        return
+    game = mines_games[user_id]
+    cell = int(callback.data.split("_")[2])
+    if cell in game["opened"]:
+        await callback.answer("Клетка уже открыта", show_alert=True)
+        return
+    if cell in game["mines"]:
+        # Проигрыш
+        update_balance(user_id, -game["bet"], game["bet"], 0)
+        await callback.message.edit_text(f"💣 *БАХ!* Вы наступили на мину.\n❌ Проигрыш: {game['bet']:.2f} 🎲", parse_mode="Markdown", reply_markup=back_button("casino_main"))
+        del mines_games[user_id]
+        await callback.answer()
+        return
+    # Открываем безопасную клетку
+    game["opened"].add(cell)
+    safe_opened = len([c for c in game["opened"] if c not in game["mines"]])
+    total_safe = len(game["safe_cells"])
+    if safe_opened == total_safe:
+        # Выигрыш
+        payout = game["bet"] * game["multiplier"]
+        update_balance(user_id, payout, game["bet"], payout)
+        await callback.message.edit_text(f"🎉 *ПОБЕДА!* Вы открыли все безопасные клетки!\n✅ Выигрыш: {game['bet']:.2f} x{game['multiplier']} = {payout:.2f} 🎲", parse_mode="Markdown", reply_markup=back_button("casino_main"))
+        del mines_games[user_id]
+        await callback.answer()
+        return
+    # Обновляем поле
+    await show_mines_field(callback.message, user_id)
+    await callback.answer()
+
+@dp.callback_query(F.data == "mines_cashout")
+async def mines_cashout(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id not in mines_games:
+        await callback.answer("Игра не найдена", show_alert=True)
+        return
+    game = mines_games[user_id]
+    safe_opened = len([c for c in game["opened"] if c not in game["mines"]])
+    if safe_opened == 0:
+        await callback.answer("Нет открытых клеток, вы не можете забрать выигрыш", show_alert=True)
+        return
+    # Выигрыш пропорционально открытым клеткам (упрощённо)
+    total_safe = len(game["safe_cells"])
+    coeff = (safe_opened / total_safe) * game["multiplier"]
+    payout = game["bet"] * coeff
+    update_balance(user_id, payout, game["bet"], payout)
+    await callback.message.edit_text(f"💰 Вы забрали выигрыш досрочно.\n✅ Выигрыш: {payout:.2f} 🎲", parse_mode="Markdown", reply_markup=back_button("casino_main"))
+    del mines_games[user_id]
+    await callback.answer()
+
+# --- АВТОМАТ (СЛОТЫ) ---
+slots_combinations = {
+    "🍒🍒🍒": 60,
+    "🍋🍋🍋": 60,
+    "🍊🍊🍊": 60,
+    "7️⃣7️⃣7️⃣": 60
+}
+
+@dp.callback_query(F.data == "game_slots")
+async def slots_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("💰 Введите ставку (мин 0.1):")
+    await state.set_state(SlotsGame.waiting_bet)
+    await callback.answer()
+
+@dp.message(SlotsGame.waiting_bet)
+async def slots_bet(message: Message, state: FSMContext):
+    try:
+        bet = float(message.text.strip())
+        if bet < 0.1:
+            await message.answer("❌ Мин 0.1")
+            return
+        balance = get_balance(message.from_user.id)
+        if bet > balance:
+            await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}")
+            return
+        await state.update_data(bet=bet)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🍒🍒🍒 x60", callback_data="slots_comb_🍒🍒🍒"),
+             InlineKeyboardButton(text="🍋🍋🍋 x60", callback_data="slots_comb_🍋🍋🍋")],
+            [InlineKeyboardButton(text="🍊🍊🍊 x60", callback_data="slots_comb_🍊🍊🍊"),
+             InlineKeyboardButton(text="7️⃣7️⃣7️⃣ x60", callback_data="slots_comb_7️⃣7️⃣7️⃣")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="casino_main")]
+        ])
+        await message.answer("🎰 *Выберите комбинацию для джекпота (x60)*", parse_mode="Markdown", reply_markup=keyboard)
+        await state.set_state(SlotsGame.waiting_combination)
+    except:
+        await message.answer("❌ Введите число")
+
+@dp.callback_query(F.data.startswith("slots_comb_"))
+async def slots_play(callback: CallbackQuery, state: FSMContext):
+    comb = callback.data.split("_")[2]
+    data = await state.get_data()
+    bet = data["bet"]
+    # Генерируем 3 случайных символа
+    symbols = ["🍒", "🍋", "🍊", "7️⃣"]
+    result = [random.choice(symbols) for _ in range(3)]
+    result_str = "".join(result)
+    if result_str == comb:
+        payout = bet * 60
+        update_balance(callback.from_user.id, payout, bet, payout)
+        msg = f"🎰 *ДЖЕКПОТ!* Выпало {result_str}\n✅ Выигрыш: {bet:.2f} x60 = {payout:.2f} 🎲"
+    else:
+        update_balance(callback.from_user.id, -bet, bet, 0)
+        msg = f"🎰 Выпало {result_str}\n❌ Проигрыш: {bet:.2f} 🎲"
+    await callback.message.edit_text(msg, parse_mode="Markdown", reply_markup=back_button("casino_main"))
+    await state.clear()
+    await callback.answer()
+
+# --- Обработчики выбора игр ---
+async def ask_bet(callback: CallbackQuery, game_name: str, state: FSMContext):
+    await state.update_data(game=game_name)
+    await callback.message.answer("💰 Введите ставку (мин 0.1):")
+    await state.set_state(BetAmount.waiting_bet)
+    await callback.answer()
+
+@dp.message(BetAmount.waiting_bet)
+async def process_bet(message: Message, state: FSMContext):
+    try:
+        bet = float(message.text.strip())
+        if bet < 0.1:
+            await message.answer("❌ Мин 0.1")
+            return
+        balance = get_balance(message.from_user.id)
+        if bet > balance:
+            await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}")
+            return
+        data = await state.get_data()
+        game = data["game"]
+        user_bets[message.from_user.id] = (game, bet)
+        await message.answer(f"🎲 *{game_name(game)}*\nВыбери множитель:", parse_mode="Markdown", reply_markup=multiplier_menu(game))
+        await state.clear()
+    except:
+        await message.answer("❌ Введите число")
+
+user_bets = {}
+
+def game_name(game):
+    names = {
+        "1cube": "1 куб", "2cube": "2 куба", "3cube": "3 куба",
+        "number": "На число", "numbers": "Числа", "no_number": "Нет числа",
+        "plus7": "+7", "18_36": "18/36",
+        "umbrella": "Зонтик", "keno": "Кено", "whale": "Кит"
+    }
+    return names.get(game, game)
+
+# Список игр, которые требуют анимации кубиков
+@dp.callback_query(F.data == "game_1cube")
+async def g1(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "1cube", state)
+@dp.callback_query(F.data == "game_2cube")
+async def g2(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "2cube", state)
+@dp.callback_query(F.data == "game_3cube")
+async def g3(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "3cube", state)
+@dp.callback_query(F.data == "game_number")
+async def gn(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "number", state)
+@dp.callback_query(F.data == "game_numbers")
+async def gns(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "numbers", state)
+@dp.callback_query(F.data == "game_no_number")
+async def gnn(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "no_number", state)
+@dp.callback_query(F.data == "game_plus7")
+async def gp7(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "plus7", state)
+@dp.callback_query(F.data == "game_18_36")
+async def g1836(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "18_36", state)
+@dp.callback_query(F.data == "game_umbrella")
+async def gu(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "umbrella", state)
+@dp.callback_query(F.data == "game_keno")
+async def gk(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "keno", state)
+@dp.callback_query(F.data == "game_whale")
+async def gw(callback: CallbackQuery, state: FSMContext): await ask_bet(callback, "whale", state)
+
+@dp.callback_query(F.data.startswith("mult_"))
+async def play_game_callback(callback: CallbackQuery):
+    _, game, mult = callback.data.split("_")
+    if callback.from_user.id not in user_bets:
+        await callback.answer("❌ Сначала выберите игру и введите ставку", show_alert=True)
+        return
+    game_name, bet = user_bets.pop(callback.from_user.id)
+    if game_name != game:
+        await callback.answer("❌ Ошибка игры", show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    if game == "1cube":
+        result = await play_1cube(user_id, bet, mult, chat_id)
+    elif game == "2cube":
+        result = await play_2cube(user_id, bet, mult, chat_id)
+    elif game == "3cube":
+        result = await play_3cube(user_id, bet, mult, chat_id)
+    elif game == "number":
+        result = await play_number(user_id, bet, mult, chat_id)
+    elif game == "numbers":
+        result = await play_numbers(user_id, bet, mult, chat_id)
+    elif game == "no_number":
+        result = await play_no_number(user_id, bet, mult, chat_id)
+    elif game == "plus7":
+        result = await play_plus7(user_id, bet, mult, chat_id)
+    elif game == "18_36":
+        result = await play_18_36(user_id, bet, mult, chat_id)
+    elif game == "umbrella":
+        result = await play_umbrella(user_id, bet, mult, chat_id)
+    elif game == "keno":
+        result = await play_keno(user_id, bet, mult, chat_id)
+    elif game == "whale":
+        result = await play_whale(user_id, bet, mult, chat_id)
+    else:
+        result = "❌ Неизвестная игра"
+    await callback.message.answer(result, parse_mode="Markdown", reply_markup=back_button("casino_main"))
+    await callback.answer()
+
+# ==================== КАЗИНО МЕНЮ ====================
+@dp.callback_query(F.data == "casino_main")
+async def casino_main_menu_handler(callback: CallbackQuery):
+    await callback.message.edit_text("🎲 *Выберите игру*", parse_mode="Markdown", reply_markup=casino_main_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "mini_games")
+async def mini_games_menu_handler(callback: CallbackQuery):
+    await callback.message.edit_text("🎲 *Мини-игры*", parse_mode="Markdown", reply_markup=mini_games_menu())
+    await callback.answer()
+
+# ==================== АДМИН-ПАНЕЛЬ ====================
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_users")
+async def admin_users(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    users = get_all_users()
+    text = "👥 Пользователи:\n"
+    for u in users:
+        sub = datetime.fromtimestamp(u['sub_until']).strftime('%d.%m.%Y') if u['sub_until'] else "Нет"
+        text += f"ID {u['tg_id']} | {u['username']} | Подписка: {sub} | Баланс: {u['balance']:.2f}\n"
+    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"))
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_add_balance")
+async def admin_add_balance_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    await callback.message.answer("🆔 ID пользователя:")
+    await state.set_state(AdminAddBalance.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminAddBalance.waiting_user_id)
+async def admin_add_balance_user(message: Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        if not get_user(user_id):
+            await message.answer("❌ Не найден")
+            await state.clear()
+            return
+        await state.update_data(target_user=user_id)
+        await message.answer("💰 Сумма:")
+        await state.set_state(AdminAddBalance.waiting_amount)
+    except:
+        await message.answer("❌ ID числом")
+
+@dp.message(AdminAddBalance.waiting_amount)
+async def admin_add_balance_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        data = await state.get_data()
+        user_id = data["target_user"]
+        new_balance = get_balance(user_id) + amount
+        set_balance(user_id, new_balance)
+        await message.answer(f"✅ Начислено {amount:.2f}. Новый баланс: {new_balance:.2f}")
+    except:
+        await message.answer("❌ Ошибка")
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_remove_balance")
+async def admin_remove_balance_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    await callback.message.answer("🆔 ID пользователя:")
+    await state.set_state(AdminRemoveBalance.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminRemoveBalance.waiting_user_id)
+async def admin_remove_balance_user(message: Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        if not get_user(user_id):
+            await message.answer("❌ Не найден")
+            await state.clear()
+            return
+        await state.update_data(target_user=user_id)
+        await message.answer("💰 Сумма списания:")
+        await state.set_state(AdminRemoveBalance.waiting_amount)
+    except:
+        await message.answer("❌ ID числом")
+
+@dp.message(AdminRemoveBalance.waiting_amount)
+async def admin_remove_balance_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        data = await state.get_data()
+        user_id = data["target_user"]
+        current = get_balance(user_id)
+        if amount > current:
+            await message.answer(f"❌ Нельзя списать больше {current:.2f}")
+            await state.clear()
+            return
+        set_balance(user_id, current - amount)
+        await message.answer(f"✅ Списано {amount:.2f}. Новый баланс: {current-amount:.2f}")
+    except:
+        await message.answer("❌ Ошибка")
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    await callback.message.answer("📢 Текст глобальной рассылки:")
+    await state.set_state(AdminBroadcast.waiting_text)
+    await callback.answer()
+
+@dp.message(AdminBroadcast.waiting_text)
+async def admin_broadcast_execute(message: Message, state: FSMContext):
+    text = message.text
+    users = get_all_users()
+    sent = 0
+    status_msg = await message.answer("🚀 Рассылка...")
+    for u in users:
+        try:
+            await bot.send_message(u['tg_id'], f"📢 {text}")
+            sent += 1
+            await asyncio.sleep(0.05)
+        except: pass
+    await status_msg.edit_text(f"✅ Отправлено {sent} пользователям.")
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    users = get_all_users()
+    total = len(users)
+    subscribed = sum(1 for u in users if u['sub_until'] > int(time.time()))
+    total_balance = sum(u['balance'] for u in users)
+    text = f"📊 Статистика\n👥 Пользователей: {total}\n✅ Подписок: {subscribed}\n💰 Баланс казино: {total_balance:.2f}"
+    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"))
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_withdraws")
+async def admin_withdraws(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    pending = get_pending_withdraws()
+    if not pending:
+        await callback.message.edit_text("📭 Нет заявок", reply_markup=back_button("admin_panel"))
+        await callback.answer()
+        return
+    for req in pending:
+        req_id, user_id, amount, wallet, _ = req
+        text = f"💰 Заявка #{req_id}\n👤 {user_id}\n💵 {amount:.2f}\n💳 {wallet}"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{req_id}"),
+             InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{req_id}")]
+        ])
+        await callback.message.answer(text, reply_markup=kb)
+    await callback.message.delete()
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def approve_withdraw(callback: CallbackQuery):
+    req_id = int(callback.data.split("_")[1])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, amount FROM withdraw_requests WHERE id=?", (req_id,))
+    row = c.fetchone()
+    if row:
+        user_id, amount = row
+        current = get_balance(user_id)
+        if current >= amount:
+            set_balance(user_id, current - amount)
+            update_withdraw_status(req_id, "approved")
+            await bot.send_message(user_id, f"✅ Вывод {amount:.2f} одобрен")
+            await callback.message.edit_text(f"✅ Заявка #{req_id} одобрена")
+        else:
+            await callback.message.edit_text(f"❌ У пользователя недостаточно средств")
+    else:
+        await callback.message.edit_text("❌ Заявка не найдена")
+    conn.close()
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject_withdraw(callback: CallbackQuery):
+    req_id = int(callback.data.split("_")[1])
+    update_withdraw_status(req_id, "rejected")
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM withdraw_requests WHERE id=?", (req_id,))
+    row = c.fetchone()
+    if row:
+        await bot.send_message(row[0], "❌ Заявка на вывод отклонена")
+    conn.close()
+    await callback.message.edit_text(f"❌ Заявка #{req_id} отклонена")
+    await callback.answer()
+
+# ==================== ЗАПУСК ====================
+async def main():
+    init_db()
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("✅ Бот запущен")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
