@@ -40,7 +40,7 @@ TARIFFS = {
     "month": {"days": 30, "price": 40, "name": "1 месяц"}
 }
 
-# ========== БАЗА ДАННЫХ ==========
+# ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -73,7 +73,6 @@ def init_db():
         wallet TEXT,
         status TEXT DEFAULT 'pending'
     )''')
-    # Миграции
     try:
         c.execute("ALTER TABLE tg_accounts ADD COLUMN name TEXT DEFAULT ''")
     except:
@@ -89,6 +88,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ==========
 def get_user(tg_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -282,23 +282,7 @@ async def check_crypto_invoice(invoice_id: str):
     except:
         return None
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
-
-# ========== МИДЛВАРЬ ДЛЯ ПРОВЕРКИ ПОДПИСКИ ==========
-@dp.callback_query(lambda c: c.data not in ["check_sub"])
-async def subscription_middleware(callback: types.CallbackQuery):
-    if not await is_subscribed_to_channel(callback.from_user.id):
-        await callback.answer("❌ Подпишитесь на канал @hlspam!", show_alert=True)
-        return
-
+# ========== ПРОВЕРКА СПАМ-БОТА ==========
 async def check_spambot(client: TelegramClient):
     try:
         spambot = await client.get_entity('@Spambot')
@@ -442,6 +426,23 @@ user_game_data = {}
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
+async def is_subscribed_to_channel(user_id: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
+# ========== МИДЛВАРЬ ДЛЯ ПРОВЕРКИ ПОДПИСКИ ==========
+@dp.callback_query(lambda c: c.data not in ["check_sub"])
+async def subscription_middleware(callback: types.CallbackQuery):
+    if not await is_subscribed_to_channel(callback.from_user.id):
+        await callback.answer("❌ Подпишитесь на канал @hlspam!", show_alert=True)
+        return
+
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
@@ -463,7 +464,7 @@ async def check_sub(callback: types.CallbackQuery):
         await callback.message.delete()
         await start_cmd(callback.message)
     else:
-        await callback.answer("❌ Вы не подписаны на канал. Нажмите 'Подписаться' и затем 'Проверить подписку'.", show_alert=True)
+        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
@@ -884,7 +885,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     except:
         await message.answer("Введите число")
 
-# ========== ПОДПИСКА ==========
+# ========== ПОДПИСКА (ПЛАТНАЯ) ==========
 @dp.callback_query(F.data == "buy_sub")
 async def buy_sub(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
