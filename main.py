@@ -17,7 +17,7 @@ from aiogram.enums import ChatType
 from telethon import TelegramClient
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
-from telethon.errors import FloodWaitError, SessionPasswordNeededError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError, RPCError
 import vk_api
 
 # ========== ЧТЕНИЕ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ==========
@@ -28,13 +28,12 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 
-# Проверка обязательных переменных
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
 
 # ========== КОНСТАНТЫ ==========
 DB_PATH = "bot.db"
-SESSIONS_DIR = "/tmp/sessions" if os.name != 'nt' else "sessions"  # для Windows локально - sessions, для Linux (Railway) - /tmp/sessions
+SESSIONS_DIR = "/tmp/sessions" if os.name != 'nt' else "sessions"
 TARIFFS = {
     "day": {"days": 1, "price": 5, "name": "1 день"},
     "week": {"days": 7, "price": 20, "name": "1 неделя"},
@@ -74,7 +73,6 @@ def init_db():
         wallet TEXT,
         status TEXT DEFAULT 'pending'
     )''')
-    # Миграции для старых баз
     try:
         c.execute("ALTER TABLE tg_accounts ADD COLUMN name TEXT DEFAULT ''")
     except:
@@ -106,7 +104,7 @@ def create_user(tg_id, username):
     conn.commit()
     conn.close()
 
-def is_subscribed(tg_id):
+def is_platinum_subscribed(tg_id):
     user = get_user(tg_id)
     return user and user["sub_until"] > int(time.time())
 
@@ -172,6 +170,14 @@ def delete_tg_account(owner_tg_id, account_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM tg_accounts WHERE id=? AND owner_tg_id=?", (account_id, owner_tg_id))
+    conn.commit()
+    conn.close()
+
+def deactivate_tg_account(owner_tg_id, account_id):
+    """Деактивирует аккаунт (помечает is_active=0) без удаления"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE tg_accounts SET is_active=0 WHERE id=? AND owner_tg_id=?", (account_id, owner_tg_id))
     conn.commit()
     conn.close()
 
@@ -256,7 +262,7 @@ async def create_crypto_invoice(amount_usd: float, description: str):
         "amount": str(amount_usd),
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": f"https://t.me/LzCcOuWBot"
+        "paid_btn_url": f"https://t.me/{BOT_TOKEN.split(':')[0]}"
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -285,7 +291,7 @@ async def check_crypto_invoice(invoice_id: str):
         return None
 
 # ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
-async def check_channel_subscription(user_id: int) -> bool:
+async def is_subscribed_to_channel(user_id: int) -> bool:
     if not CHANNEL_USERNAME:
         return True
     try:
@@ -294,21 +300,33 @@ async def check_channel_subscription(user_id: int) -> bool:
     except:
         return False
 
-async def check_spambot(client: TelegramClient):
+# ========== ФУНКЦИЯ ДЛЯ ОБРАБОТКИ СЛЕТЕВШЕЙ СЕССИИ ==========
+async def invalidate_tg_account(user_id: int, account_id: int, bot_message: types.Message = None):
+    """Деактивирует аккаунт, уведомляет пользователя"""
+    deactivate_tg_account(user_id, account_id)
+    text = f"❌ Аккаунт слетел / удалили сессию. Он был удалён из ваших подключённых."
+    if bot_message:
+        await bot_message.answer(text)
+    else:
+        await bot.send_message(user_id, text)
+
+# ========== ОБРАБОТЧИК ОШИБОК ДЛЯ TELEGRAM КЛИЕНТА ==========
+async def safe_telegram_call(coro, user_id: int, account_id: int, error_message: str = None):
+    """Выполняет корутину, при ошибке авторизации деактивирует аккаунт"""
     try:
-        spambot = await client.get_entity('@Spambot')
-        await client.send_message(spambot, '/start')
-        await asyncio.sleep(3)
-        async for msg in client.iter_messages(spambot, limit=1):
-            text = msg.text or ''
-            if 'no restrictions' in text.lower():
-                return "✅ Нет ограничений (спам-блок отсутствует)"
-            elif 'limited' in text.lower() or 'restricted' in text.lower():
-                return "⚠️ Есть ограничения (спам-блок активен)"
-            else:
-                return "🤷 Не удалось определить статус"
+        return await coro
+    except (AuthKeyError, UnauthorizedError, RPCError) as e:
+        if "not authorized" in str(e).lower() or "auth key" in str(e).lower():
+            await invalidate_tg_account(user_id, account_id, None)
+            # Отправим уведомление в ЛС
+            await bot.send_message(user_id, f"❌ Ваш Telegram аккаунт был автоматически удалён из-за слетевшей сессии.")
+        else:
+            # Другая ошибка – просто логируем
+            print(f"Ошибка при вызове {coro}: {e}")
+        raise
     except Exception as e:
-        return f"❌ Ошибка проверки: {e}"
+        print(f"Неожиданная ошибка: {e}")
+        raise
 
 # ========== КЛАВИАТУРЫ ==========
 def main_menu(tg_id):
@@ -347,7 +365,7 @@ def tg_accounts_list(user_id):
     accounts = get_user_tg_accounts(user_id)
     kb = []
     for acc in accounts:
-        status = "✅" if acc["is_active"] else "⭕"
+        status = "✅" if acc["is_active"] else "❌"
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']} ({acc['phone']})", callback_data=f"tg_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ Добавить", callback_data="add_tg")])
     kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_accounts")])
@@ -357,7 +375,7 @@ def vk_accounts_list(user_id):
     accounts = get_user_vk_accounts(user_id)
     kb = []
     for acc in accounts:
-        status = "✅" if acc["is_active"] else "⭕"
+        status = "✅" if acc["is_active"] else "❌"
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ Добавить", callback_data="add_vk")])
     kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_accounts")])
@@ -436,23 +454,13 @@ user_game_data = {}
 # ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
 
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
+# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ (МИДЛВАРЬ) ==========
+@dp.callback_query(lambda c: c.data not in ["check_sub"])
+async def subscription_middleware(callback: types.CallbackQuery):
+    if not await is_subscribed_to_channel(callback.from_user.id):
+        await callback.answer("❌ Подпишитесь на канал @hlspam!", show_alert=True)
+        return
 
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
@@ -575,6 +583,7 @@ async def tg_delete(callback: types.CallbackQuery):
     await callback.answer("Аккаунт удалён", show_alert=True)
     await list_tg_accounts(callback)
 
+# ========== ДЕЙСТВИЯ С АККАУНТОМ С ОБРАБОТКОЙ СБРОСА СЕССИИ ==========
 @dp.callback_query(F.data.startswith("tg_join_"))
 async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -606,6 +615,8 @@ async def tg_join_execute(message: types.Message, state: FSMContext):
     await client.connect()
     link = message.text.strip()
     try:
+        # Проверяем, что клиент авторизован (если нет – вызовет исключение)
+        await client.get_me()
         if "joinchat" in link:
             hash_match = re.search(r'joinchat/([A-Za-z0-9_-]+)', link)
             if hash_match:
@@ -617,10 +628,13 @@ async def tg_join_execute(message: types.Message, state: FSMContext):
             entity = await client.get_entity(link)
             await client(JoinChannelRequest(entity))
         await message.answer(f"✅ Вступил(а) в {link}")
+    except (AuthKeyError, UnauthorizedError) as e:
+        await invalidate_tg_account(message.from_user.id, acc_id, message)
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
-    await client.disconnect()
-    await state.clear()
+    finally:
+        await client.disconnect()
+        await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_leave_"))
 async def tg_leave_start(callback: types.CallbackQuery, state: FSMContext):
@@ -653,13 +667,17 @@ async def tg_leave_execute(message: types.Message, state: FSMContext):
     await client.connect()
     target = message.text.strip()
     try:
+        await client.get_me()
         entity = await client.get_entity(target)
         await client.delete_dialog(entity)
         await message.answer(f"✅ Вышел(а) из чата {target}")
+    except (AuthKeyError, UnauthorizedError) as e:
+        await invalidate_tg_account(message.from_user.id, acc_id, message)
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
-    await client.disconnect()
-    await state.clear()
+    finally:
+        await client.disconnect()
+        await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_send_msg_"))
 async def tg_send_start(callback: types.CallbackQuery, state: FSMContext):
@@ -701,13 +719,17 @@ async def tg_send_text(message: types.Message, state: FSMContext):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
+        await client.get_me()
         entity = await client.get_entity(target)
         await client.send_message(entity, text)
         await message.answer(f"✅ Сообщение отправлено в {target}")
+    except (AuthKeyError, UnauthorizedError) as e:
+        await invalidate_tg_account(message.from_user.id, acc_id, message)
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
-    await client.disconnect()
-    await state.clear()
+    finally:
+        await client.disconnect()
+        await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_broadcast_"))
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
@@ -752,32 +774,34 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         session_file = row[0]
         client = TelegramClient(session_file, API_ID, API_HASH)
         await client.connect()
-        dialogs = await client.get_dialogs()
-        targets = [d for d in dialogs if d.is_user]
-        total = len(targets)
-        await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
-        sent = 0
-        for dialog in targets:
-            try:
-                await client.send_message(dialog.entity, text)
-                sent += 1
-                await asyncio.sleep(delay)
-            except FloodWaitError as e:
-                await asyncio.sleep(e.seconds)
+        try:
+            # Проверяем валидность сессии
+            await client.get_me()
+            dialogs = await client.get_dialogs()
+            targets = [d for d in dialogs if d.is_user]
+            total = len(targets)
+            await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
+            sent = 0
+            for dialog in targets:
                 try:
                     await client.send_message(dialog.entity, text)
                     sent += 1
-                except:
+                    await asyncio.sleep(delay)
+                except FloodWaitError as e:
+                    await asyncio.sleep(e.seconds)
+                    try:
+                        await client.send_message(dialog.entity, text)
+                        sent += 1
+                    except:
+                        continue
+                except Exception as e:
                     continue
-            except Exception as e:
-                err = str(e).lower()
-                if any(x in err for x in ['user is blocked', 'peer_id_invalid', 'not found', 'cannot write']):
-                    continue
-                else:
-                    continue
-        await client.disconnect()
-        await message.answer(f"✅ Отправлено {sent} из {total}")
-        await state.clear()
+            await message.answer(f"✅ Отправлено {sent} из {total}")
+        except (AuthKeyError, UnauthorizedError) as e:
+            await invalidate_tg_account(message.from_user.id, acc_id, message)
+        finally:
+            await client.disconnect()
+            await state.clear()
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
         await state.clear()
@@ -1097,7 +1121,7 @@ async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_subscribed(callback.from_user.id):
+    if not is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна платная подписка!", show_alert=True)
         return
     await callback.message.answer("📞 Введите номер телефона в формате +79991234567:")
@@ -1177,7 +1201,6 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
             await client.connect()
         me = await client.get_me()
         spam_status = await check_spambot(client)
-
         country_map = {
             "7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь",
             "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия",
@@ -1189,12 +1212,10 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
-
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
-
         mutual = 0
         for user in users[:50]:
             try:
@@ -1203,7 +1224,6 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                     break
             except:
                 pass
-
         info = (
             f"📱 *Telegram аккаунт*\n"
             f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone) > 7 else ''}`\n"
@@ -1225,7 +1245,7 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_subscribed(callback.from_user.id):
+    if not is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer("🔑 Введите токен VK (access_token) с правами на сообщения и друзей:")
@@ -1444,9 +1464,9 @@ async def again_game(callback: types.CallbackQuery):
         await asyncio.sleep(1)
         win = (choice == "1cube_less" and roll <= 3) or (choice == "1cube_more" and roll >= 4)
         if win:
-            payout = bet * 3
+            payout = bet * 2
             update_balance(user_id, payout)
-            result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x3 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
+            result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
         else:
             update_balance(user_id, -bet)
             result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n❌ ПРОИГРЫШ: -{bet}$\n💰 Баланс: {get_balance(user_id):.2f}$"
@@ -1459,9 +1479,9 @@ async def again_game(callback: types.CallbackQuery):
         await asyncio.sleep(0.5)
         win = (choice == "2cube_less7" and total < 7) or (choice == "2cube_eq7" and total == 7) or (choice == "2cube_more7" and total > 7)
         if win:
-            payout = bet * 3
+            payout = bet * 2.4
             update_balance(user_id, payout)
-            result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x3 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
+            result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x2.4 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
         else:
             update_balance(user_id, -bet)
             result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n❌ ПРОИГРЫШ: -{bet}$\n💰 Баланс: {get_balance(user_id):.2f}$"
@@ -1810,14 +1830,6 @@ async def reject_withdraw(callback: types.CallbackQuery):
     conn.close()
     await callback.message.edit_text(f"❌ Заявка #{req_id} отклонена")
     await callback.answer()
-
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(callback: types.CallbackQuery):
-    if await is_subscribed_to_channel(callback.from_user.id):
-        await callback.message.delete()
-        await start_cmd(callback.message)
-    else:
-        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 # ========== ЗАПУСК ==========
 async def main():
