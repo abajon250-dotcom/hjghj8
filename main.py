@@ -17,7 +17,7 @@ from aiogram.enums import ChatType
 from telethon import TelegramClient
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
-from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError, RPCError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError
 import vk_api
 
 # ========== ЧТЕНИЕ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ==========
@@ -26,7 +26,7 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")  # не используется
 
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
@@ -104,7 +104,7 @@ def create_user(tg_id, username):
     conn.commit()
     conn.close()
 
-def is_platinum_subscribed(tg_id):
+def is_subscribed(tg_id):
     user = get_user(tg_id)
     return user and user["sub_until"] > int(time.time())
 
@@ -174,7 +174,7 @@ def delete_tg_account(owner_tg_id, account_id):
     conn.close()
 
 def deactivate_tg_account(owner_tg_id, account_id):
-    """Деактивирует аккаунт (помечает is_active=0) без удаления"""
+    """Деактивирует аккаунт (is_active=0) без удаления"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE tg_accounts SET is_active=0 WHERE id=? AND owner_tg_id=?", (account_id, owner_tg_id))
@@ -290,43 +290,22 @@ async def check_crypto_invoice(invoice_id: str):
     except:
         return None
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+async def check_spambot(client: TelegramClient):
     try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
-
-# ========== ФУНКЦИЯ ДЛЯ ОБРАБОТКИ СЛЕТЕВШЕЙ СЕССИИ ==========
-async def invalidate_tg_account(user_id: int, account_id: int, bot_message: types.Message = None):
-    """Деактивирует аккаунт, уведомляет пользователя"""
-    deactivate_tg_account(user_id, account_id)
-    text = f"❌ Аккаунт слетел / удалили сессию. Он был удалён из ваших подключённых."
-    if bot_message:
-        await bot_message.answer(text)
-    else:
-        await bot.send_message(user_id, text)
-
-# ========== ОБРАБОТЧИК ОШИБОК ДЛЯ TELEGRAM КЛИЕНТА ==========
-async def safe_telegram_call(coro, user_id: int, account_id: int, error_message: str = None):
-    """Выполняет корутину, при ошибке авторизации деактивирует аккаунт"""
-    try:
-        return await coro
-    except (AuthKeyError, UnauthorizedError, RPCError) as e:
-        if "not authorized" in str(e).lower() or "auth key" in str(e).lower():
-            await invalidate_tg_account(user_id, account_id, None)
-            # Отправим уведомление в ЛС
-            await bot.send_message(user_id, f"❌ Ваш Telegram аккаунт был автоматически удалён из-за слетевшей сессии.")
-        else:
-            # Другая ошибка – просто логируем
-            print(f"Ошибка при вызове {coro}: {e}")
-        raise
+        spambot = await client.get_entity('@Spambot')
+        await client.send_message(spambot, '/start')
+        await asyncio.sleep(3)
+        async for msg in client.iter_messages(spambot, limit=1):
+            text = msg.text or ''
+            if 'no restrictions' in text.lower():
+                return "✅ Нет ограничений (спам-блок отсутствует)"
+            elif 'limited' in text.lower() or 'restricted' in text.lower():
+                return "⚠️ Есть ограничения (спам-блок активен)"
+            else:
+                return "🤷 Не удалось определить статус"
     except Exception as e:
-        print(f"Неожиданная ошибка: {e}")
-        raise
+        return f"❌ Ошибка проверки: {e}"
 
 # ========== КЛАВИАТУРЫ ==========
 def main_menu(tg_id):
@@ -455,35 +434,13 @@ user_game_data = {}
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ (МИДЛВАРЬ) ==========
-@dp.callback_query(lambda c: c.data not in ["check_sub"])
-async def subscription_middleware(callback: types.CallbackQuery):
-    if not await is_subscribed_to_channel(callback.from_user.id):
-        await callback.answer("❌ Подпишитесь на канал @hlspam!", show_alert=True)
-        return
-
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
-    if not await is_subscribed_to_channel(message.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")]
-        ])
-        await message.answer(f"Подпишитесь на @{CHANNEL_USERNAME}", reply_markup=kb)
-        return
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
-
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(callback: types.CallbackQuery):
-    if await is_subscribed_to_channel(callback.from_user.id):
-        await callback.message.delete()
-        await start_cmd(callback.message)
-    else:
-        await callback.answer("❌ Вы не подписаны на канал. Нажмите 'Подписаться' и затем 'Проверить подписку'.", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
@@ -584,6 +541,14 @@ async def tg_delete(callback: types.CallbackQuery):
     await list_tg_accounts(callback)
 
 # ========== ДЕЙСТВИЯ С АККАУНТОМ С ОБРАБОТКОЙ СБРОСА СЕССИИ ==========
+async def invalidate_tg_account(user_id: int, account_id: int, message: types.Message = None):
+    deactivate_tg_account(user_id, account_id)
+    text = "❌ Ваш Telegram аккаунт был автоматически удалён из-за слетевшей сессии."
+    if message:
+        await message.answer(text)
+    else:
+        await bot.send_message(user_id, text)
+
 @dp.callback_query(F.data.startswith("tg_join_"))
 async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -615,8 +580,7 @@ async def tg_join_execute(message: types.Message, state: FSMContext):
     await client.connect()
     link = message.text.strip()
     try:
-        # Проверяем, что клиент авторизован (если нет – вызовет исключение)
-        await client.get_me()
+        await client.get_me()  # проверка авторизации
         if "joinchat" in link:
             hash_match = re.search(r'joinchat/([A-Za-z0-9_-]+)', link)
             if hash_match:
@@ -775,7 +739,6 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         client = TelegramClient(session_file, API_ID, API_HASH)
         await client.connect()
         try:
-            # Проверяем валидность сессии
             await client.get_me()
             dialogs = await client.get_dialogs()
             targets = [d for d in dialogs if d.is_user]
@@ -794,7 +757,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
                         sent += 1
                     except:
                         continue
-                except Exception as e:
+                except Exception:
                     continue
             await message.answer(f"✅ Отправлено {sent} из {total}")
         except (AuthKeyError, UnauthorizedError) as e:
@@ -1121,7 +1084,7 @@ async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_platinum_subscribed(callback.from_user.id):
+    if not is_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна платная подписка!", show_alert=True)
         return
     await callback.message.answer("📞 Введите номер телефона в формате +79991234567:")
@@ -1245,7 +1208,7 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_platinum_subscribed(callback.from_user.id):
+    if not is_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer("🔑 Введите токен VK (access_token) с правами на сообщения и друзей:")
