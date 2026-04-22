@@ -28,12 +28,13 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 
+# Проверка обязательных переменных
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
 
 # ========== КОНСТАНТЫ ==========
 DB_PATH = "bot.db"
-SESSIONS_DIR = "/tmp/sessions" if os.name != 'nt' else "sessions"
+SESSIONS_DIR = "/tmp/sessions" if os.name != 'nt' else "sessions"  # для Windows локально - sessions, для Linux (Railway) - /tmp/sessions
 TARIFFS = {
     "day": {"days": 1, "price": 5, "name": "1 день"},
     "week": {"days": 7, "price": 20, "name": "1 неделя"},
@@ -73,6 +74,7 @@ def init_db():
         wallet TEXT,
         status TEXT DEFAULT 'pending'
     )''')
+    # Миграции для старых баз
     try:
         c.execute("ALTER TABLE tg_accounts ADD COLUMN name TEXT DEFAULT ''")
     except:
@@ -104,11 +106,11 @@ def create_user(tg_id, username):
     conn.commit()
     conn.close()
 
-def is_platinum_subscribed(tg_id):
+def is_subscribed(tg_id):
     user = get_user(tg_id)
     return user and user["sub_until"] > int(time.time())
 
-def set_platinum_subscription(tg_id, days):
+def set_subscription(tg_id, days):
     new_time = int(time.time()) + days * 86400
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -254,7 +256,7 @@ async def create_crypto_invoice(amount_usd: float, description: str):
         "amount": str(amount_usd),
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": f"https://t.me/{BOT_TOKEN.split(':')[0]}"
+        "paid_btn_url": f"https://t.me/LzCcOuWBot"
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -282,7 +284,16 @@ async def check_crypto_invoice(invoice_id: str):
     except:
         return None
 
-# ========== ПРОВЕРКА СПАМ-БОТА ==========
+# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
+async def check_channel_subscription(user_id: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
 async def check_spambot(client: TelegramClient):
     try:
         spambot = await client.get_entity('@Spambot')
@@ -425,8 +436,6 @@ user_game_data = {}
 # ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
 async def is_subscribed_to_channel(user_id: int) -> bool:
     if not CHANNEL_USERNAME:
         return True
@@ -436,12 +445,14 @@ async def is_subscribed_to_channel(user_id: int) -> bool:
     except:
         return False
 
-# ========== МИДЛВАРЬ ДЛЯ ПРОВЕРКИ ПОДПИСКИ ==========
-@dp.callback_query(lambda c: c.data not in ["check_sub"])
-async def subscription_middleware(callback: types.CallbackQuery):
-    if not await is_subscribed_to_channel(callback.from_user.id):
-        await callback.answer("❌ Подпишитесь на канал @hlspam!", show_alert=True)
-        return
+async def is_subscribed_to_channel(user_id: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
 
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
@@ -464,7 +475,7 @@ async def check_sub(callback: types.CallbackQuery):
         await callback.message.delete()
         await start_cmd(callback.message)
     else:
-        await callback.answer("❌ Вы не подписаны", show_alert=True)
+        await callback.answer("❌ Вы не подписаны на канал. Нажмите 'Подписаться' и затем 'Проверить подписку'.", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
@@ -885,7 +896,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     except:
         await message.answer("Введите число")
 
-# ========== ПОДПИСКА (ПЛАТНАЯ) ==========
+# ========== ПОДПИСКА ==========
 @dp.callback_query(F.data == "buy_sub")
 async def buy_sub(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -929,7 +940,7 @@ async def pay_balance(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     if get_balance(user_id) >= tariff["price"]:
         update_balance(user_id, -tariff["price"])
-        set_platinum_subscription(user_id, tariff["days"])
+        set_subscription(user_id, tariff["days"])
         await callback.message.edit_text(f"✅ Подписка на {tariff['name']} активирована!", reply_markup=main_menu(user_id))
     else:
         await callback.answer(f"Не хватает. Нужно {tariff['price']}$", show_alert=True)
@@ -972,7 +983,7 @@ async def check_sub_payment(callback: types.CallbackQuery):
     if status == "paid":
         if callback.from_user.id in crypto_pending:
             days = crypto_pending[callback.from_user.id]["days"]
-            set_platinum_subscription(callback.from_user.id, days)
+            set_subscription(callback.from_user.id, days)
             del crypto_pending[callback.from_user.id]
             await callback.message.edit_text(f"✅ Подписка активирована на {days} дней!", reply_markup=main_menu(callback.from_user.id))
         else:
@@ -1086,7 +1097,7 @@ async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_platinum_subscribed(callback.from_user.id):
+    if not is_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна платная подписка!", show_alert=True)
         return
     await callback.message.answer("📞 Введите номер телефона в формате +79991234567:")
@@ -1214,7 +1225,7 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
         await callback.answer("Только в ЛС", show_alert=True)
         return
-    if not is_platinum_subscribed(callback.from_user.id):
+    if not is_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer("🔑 Введите токен VK (access_token) с правами на сообщения и друзей:")
@@ -1433,9 +1444,9 @@ async def again_game(callback: types.CallbackQuery):
         await asyncio.sleep(1)
         win = (choice == "1cube_less" and roll <= 3) or (choice == "1cube_more" and roll >= 4)
         if win:
-            payout = bet * 2
+            payout = bet * 3
             update_balance(user_id, payout)
-            result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
+            result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x3 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
         else:
             update_balance(user_id, -bet)
             result_text = f"🎲 Выпало {roll}\n💰 Ставка: {bet}$\n❌ ПРОИГРЫШ: -{bet}$\n💰 Баланс: {get_balance(user_id):.2f}$"
@@ -1448,9 +1459,9 @@ async def again_game(callback: types.CallbackQuery):
         await asyncio.sleep(0.5)
         win = (choice == "2cube_less7" and total < 7) or (choice == "2cube_eq7" and total == 7) or (choice == "2cube_more7" and total > 7)
         if win:
-            payout = bet * 2.4
+            payout = bet * 3
             update_balance(user_id, payout)
-            result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x2.4 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
+            result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n✅ ВЫИГРЫШ: {bet}$ x3 = {payout}$\n💰 Баланс: {get_balance(user_id):.2f}$"
         else:
             update_balance(user_id, -bet)
             result_text = f"🎲 {msg1.dice.value}+{msg2.dice.value}={total}\n💰 Ставка: {bet}$\n❌ ПРОИГРЫШ: -{bet}$\n💰 Баланс: {get_balance(user_id):.2f}$"
@@ -1799,6 +1810,14 @@ async def reject_withdraw(callback: types.CallbackQuery):
     conn.close()
     await callback.message.edit_text(f"❌ Заявка #{req_id} отклонена")
     await callback.answer()
+
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(callback: types.CallbackQuery):
+    if await is_subscribed_to_channel(callback.from_user.id):
+        await callback.message.delete()
+        await start_cmd(callback.message)
+    else:
+        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 # ========== ЗАПУСК ==========
 async def main():
