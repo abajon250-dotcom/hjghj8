@@ -317,15 +317,6 @@ def get_russian_error(e: Exception) -> str:
         return "Сообщение не может быть пустым. Добавьте текст или файл."
     return error
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
 
 # ========== КЛАВИАТУРЫ ==========
 def main_menu(tg_id):
@@ -526,41 +517,15 @@ user_game_data = {}
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ (МИДЛВАРЬ) ==========
-@dp.callback_query(lambda c: c.data not in ["check_sub"])
-async def subscription_middleware(callback: types.CallbackQuery):
-    if not await is_subscribed_to_channel(callback.from_user.id):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
-        ])
-        await callback.message.answer(
-            f"❌ Для использования бота подпишитесь на канал @{CHANNEL_USERNAME}",
-            reply_markup=keyboard
-        )
-        await callback.answer()
-        return# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
     if not await is_subscribed_to_channel(message.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")]
-        ])
-        await message.answer(f"Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
-        return
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
 
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(callback: types.CallbackQuery):
-    if await is_subscribed_to_channel(callback.from_user.id):
-        await callback.message.delete()
-        await start_cmd(callback.message)
-    else:
-        await callback.answer("❌ Вы не подписаны на канал. Нажмите 'Подписаться' и затем 'Проверить подписку'.", show_alert=True)
+
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
