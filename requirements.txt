@@ -3,3 +3,4 @@ telethon==1.36.0
 vk-api==11.10.0
 aiohttp==3.9.3
 python-dotenv==1.0.0
+asyncpg
