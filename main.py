@@ -3763,12 +3763,10 @@ async def check_all_tg_accounts():
 # ========== ЗАПУСК ==========
 async def main():
     init_db()
-    # Устанавливаем админу подписку до 2030 года
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET sub_until = ? WHERE tg_id = ?", (int(time.time()) + 365 * 86400 * 10, ADMIN_ID))
-    conn.commit()
-    conn.close()
-    
+    await bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(check_all_tg_accounts())
+    print("✅ Бот запущен")
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
