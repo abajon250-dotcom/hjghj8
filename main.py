@@ -522,7 +522,6 @@ async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
-    if not await is_subscribed_to_channel(message.from_user.id):
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
 
 
