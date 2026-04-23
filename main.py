@@ -654,15 +654,15 @@ async def tg_cloud_password_start(callback: types.CallbackQuery, state: FSMConte
         return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("🔐 Введите новый облачный пароль (минимум 8 символов):")
+    await callback.message.answer("🔐 Введите новый облачный пароль (минимум 1 символ):")
     await state.set_state(ManageTG.waiting_cloud_password)
     await callback.answer()
 
 @dp.message(ManageTG.waiting_cloud_password)
 async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     password = message.text.strip()
-    if len(password) < 8:
-        await message.answer("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
+    if len(password) < 1:
+        await message.answer("❌ Пароль не может быть пустым. Введите хотя бы 1 символ.")
         return
     data = await state.get_data()
     acc_id = data["acc_id"]
@@ -679,17 +679,18 @@ async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
+        # Проверяем авторизацию
         await client.get_me()
-        await client.edit_2fa(password=password)
+        # Устанавливаем 2FA
+        await client.edit_2fa(new_password=password)
         await message.answer("✅ Облачный пароль (2FA) успешно установлен!")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)}")
     finally:
         await client.disconnect()
         await state.clear()
-
 @dp.callback_query(F.data.startswith("tg_request_code_"))
 async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -1892,7 +1893,7 @@ async def game_basketball_choice_after_bet(message: types.Message, state: FSMCon
     await asyncio.sleep(1)
     outcomes = {
         "basket_exact": {"win": value == 5, "mult": 7, "name": "Точное попадание"},
-        "basket_ring": {"win": value >= 4, "mult": 3, "name": "Попадание в кольцо"},
+        "basket_ring": {"win": value == 4, "mult": 3, "name": "Попадание в кольцо"},
         "basket_miss": {"win": value <= 2, "mult": 1.5, "name": "Мимо"},
         "basket_board": {"win": value == 3, "mult": 2.5, "name": "Щит"}
     }
@@ -1986,10 +1987,10 @@ async def game_football_choice_after_bet(message: types.Message, state: FSMConte
     value = msg.dice.value
     await asyncio.sleep(1)
     outcomes = {
-        "foot_nine": {"win": value == 6, "mult": 8, "name": "Гол в девятку"},
-        "foot_target": {"win": value >= 4, "mult": 3, "name": "Гол в створ"},
+        "foot_nine": {"win": value == 5, "mult": 8, "name": "Гол в девятку"},
+        "foot_target": {"win": value == 4, "mult": 3, "name": "Гол в створ"},
         "foot_miss": {"win": value <= 2, "mult": 1.5, "name": "Мимо"},
-        "foot_post": {"win": value == 3 or value == 5, "mult": 5, "name": "Штанга/перекладина"}
+        "foot_post": {"win": value == 3, "mult": 5, "name": "Штанга/перекладина"}
     }
     outcome = outcomes.get(mode)
     if not outcome:
