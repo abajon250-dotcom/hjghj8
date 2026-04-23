@@ -1351,6 +1351,9 @@ async def tg_send_target(message: types.Message, state: FSMContext):
 
 @dp.message(TGAction.waiting_message)
 async def tg_send_text(message: types.Message, state: FSMContext):
+    if not message.text or not message.text.strip():
+        await message.answer("❌ Текст сообщения не может быть пустым. Введите текст.")
+        return
     data = await state.get_data()
     acc_id = data["acc_id"]
     target = data["target"]
@@ -1384,13 +1387,7 @@ async def tg_send_text(message: types.Message, state: FSMContext):
     except FloodWaitError as e:
         await message.answer(f"⚠️ Слишком много запросов. Подождите {e.seconds} секунд.")
     except Exception as e:
-        error = str(e)
-        if "Cannot find any entity" in error or "No user" in error:
-            await message.answer(f"❌ Не удалось найти пользователя {target}. Проверьте ID или username.")
-        elif "Too many requests" in error:
-            await message.answer(f"⚠️ Слишком много запросов. Попробуйте позже.")
-        else:
-            await message.answer(f"❌ Ошибка: {error}")
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
@@ -1403,20 +1400,21 @@ async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
         return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username получателя:")
+    await callback.message.answer("📤 Введите ID или username получателя:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
 @dp.message(TGAction.waiting_target)
 async def tg_photo_target(message: types.Message, state: FSMContext):
     raw = message.text.strip()
+    # Очищаем ввод
     if raw.replace('-', '').isdigit():
         target = raw
     else:
         target = raw
     await state.update_data(target=target)
-    await message.answer("Пришлите фото:")
-    await state.set_state(TGAction.waiting_photo)
+    await message.answer("🖼️ Теперь пришлите фото (одно изображение):")
+    await state.set_state(TGAction.waiting_photo)   # <-- важно: waiting_photo, а не waiting_message
 
 @dp.message(TGAction.waiting_photo, F.photo)
 async def tg_send_photo(message: types.Message, state: FSMContext):
@@ -1429,7 +1427,7 @@ async def tg_send_photo(message: types.Message, state: FSMContext):
     row = c.fetchone()
     conn.close()
     if not row:
-        await message.answer("Аккаунт не найден")
+        await message.answer("❌ Аккаунт не найден")
         await state.clear()
         return
     session_file, phone = row
@@ -1444,6 +1442,7 @@ async def tg_send_photo(message: types.Message, state: FSMContext):
                 entity = await client.get_entity(int(target))
             else:
                 raise Exception(f"Не удалось найти пользователя {target}")
+        # Скачиваем фото и отправляем
         photo = message.photo[-1]
         file = await message.bot.get_file(photo.file_id)
         file_path = f"/tmp/{photo.file_id}.jpg"
@@ -1452,6 +1451,9 @@ async def tg_send_photo(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Фото отправлено в {target}")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
+        await message.answer(f"❌ Аккаунт {phone} был удалён из-за слетевшей сессии.")
+    except FloodWaitError as e:
+        await message.answer(f"⚠️ Слишком много запросов. Подождите {e.seconds} секунд.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
@@ -1466,7 +1468,7 @@ async def tg_send_doc_start(callback: types.CallbackQuery, state: FSMContext):
         return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username получателя:")
+    await callback.message.answer("📤 Введите ID или username получателя:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
@@ -1478,7 +1480,7 @@ async def tg_doc_target(message: types.Message, state: FSMContext):
     else:
         target = raw
     await state.update_data(target=target)
-    await message.answer("Пришлите документ (файл):")
+    await message.answer("📄 Пришлите документ (файл):")
     await state.set_state(TGAction.waiting_file)
 
 @dp.message(TGAction.waiting_file, F.document)
@@ -1492,7 +1494,7 @@ async def tg_send_doc(message: types.Message, state: FSMContext):
     row = c.fetchone()
     conn.close()
     if not row:
-        await message.answer("Аккаунт не найден")
+        await message.answer("❌ Аккаунт не найден")
         await state.clear()
         return
     session_file, phone = row
@@ -1515,6 +1517,9 @@ async def tg_send_doc(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Документ отправлен в {target}")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
+        await message.answer(f"❌ Аккаунт {phone} был удалён из-за слетевшей сессии.")
+    except FloodWaitError as e:
+        await message.answer(f"⚠️ Слишком много запросов. Подождите {e.seconds} секунд.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
