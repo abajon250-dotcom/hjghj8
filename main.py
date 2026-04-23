@@ -29,6 +29,8 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")  # если не нужен, оставьте пустым
+
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
 
@@ -42,12 +44,47 @@ TARIFFS = {"day": {"days": 1, "price": 2.5, "name": "1 день"},
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (tg_id INTEGER PRIMARY KEY, username TEXT, sub_until INTEGER DEFAULT 0, balance REAL DEFAULT 0)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS tg_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_tg_id INTEGER, phone TEXT, session_file TEXT, is_active INTEGER DEFAULT 1, name TEXT DEFAULT '', last_used INTEGER DEFAULT 0)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS vk_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_tg_id INTEGER, token TEXT, vk_name TEXT, is_active INTEGER DEFAULT 1)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, wallet TEXT, status TEXT DEFAULT 'pending')''')
-    c.execute('''CREATE TABLE IF NOT EXISTS promocodes (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, days INTEGER, uses INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS used_promocodes (user_id INTEGER, code_id INTEGER, used_at INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        tg_id INTEGER PRIMARY KEY,
+        username TEXT,
+        sub_until INTEGER DEFAULT 0,
+        balance REAL DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS tg_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_tg_id INTEGER,
+        phone TEXT,
+        session_file TEXT,
+        is_active INTEGER DEFAULT 1,
+        name TEXT DEFAULT '',
+        last_used INTEGER DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS vk_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_tg_id INTEGER,
+        token TEXT,
+        vk_name TEXT,
+        is_active INTEGER DEFAULT 1
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        amount REAL,
+        wallet TEXT,
+        status TEXT DEFAULT 'pending'
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS promocodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE,
+        days INTEGER,
+        uses INTEGER DEFAULT 0,
+        max_uses INTEGER DEFAULT 1
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS used_promocodes (
+        user_id INTEGER,
+        code_id INTEGER,
+        used_at INTEGER
+    )''')
     try:
         c.execute("ALTER TABLE tg_accounts ADD COLUMN name TEXT DEFAULT ''")
     except: pass
@@ -75,7 +112,7 @@ def create_user(tg_id, username):
     conn.commit()
     conn.close()
 
-def is_platinum_subscribed(tg_id):
+def is_subscribed(tg_id):
     if tg_id == ADMIN_ID:
         return True
     user = get_user(tg_id)
@@ -110,7 +147,8 @@ def set_balance(tg_id, new_balance):
 def add_tg_account(owner_tg_id, phone, session_file, name):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO tg_accounts (owner_tg_id, phone, session_file, name, last_used) VALUES (?,?,?,?,?)", (owner_tg_id, phone, session_file, name, int(time.time())))
+    c.execute("INSERT INTO tg_accounts (owner_tg_id, phone, session_file, name, last_used) VALUES (?,?,?,?,?)",
+              (owner_tg_id, phone, session_file, name, int(time.time())))
     conn.commit()
     conn.close()
 
@@ -220,6 +258,44 @@ def update_withdraw_status(req_id, status):
     conn.commit()
     conn.close()
 
+def create_promocode(code, days, max_uses=1):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO promocodes (code, days, max_uses) VALUES (?,?,?)", (code, days, max_uses))
+    conn.commit()
+    conn.close()
+
+def get_promocode(code):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, days, uses, max_uses FROM promocodes WHERE code=?", (code,))
+    row = c.fetchone()
+    conn.close()
+    return {"id": row[0], "days": row[1], "uses": row[2], "max_uses": row[3]} if row else None
+
+def use_promocode(user_id, code_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE promocodes SET uses = uses + 1 WHERE id=?", (code_id,))
+    c.execute("INSERT INTO used_promocodes (user_id, code_id, used_at) VALUES (?,?,?)", (user_id, code_id, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def get_all_promocodes():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, code, days, uses, max_uses FROM promocodes")
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "code": r[1], "days": r[2], "uses": r[3], "max_uses": r[4]} for r in rows]
+
+def delete_promocode(code_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM promocodes WHERE id=?", (code_id,))
+    conn.commit()
+    conn.close()
+
 # ========== CRYPTOBOT ==========
 CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
@@ -255,28 +331,55 @@ async def check_crypto_invoice(invoice_id: str):
     except:
         return None
 
-# ========== ОБРАБОТКА СЛЕТА СЕССИИ (МГНОВЕННОЕ УВЕДОМЛЕНИЕ) ==========
+# ========== ОБРАБОТКА СЛЕТА СЕССИИ ==========
 async def handle_session_error(user_id: int, account_id: int, phone: str):
     deactivate_tg_account(user_id, account_id)
     await bot.send_message(user_id, f"❌ Аккаунт {phone} был автоматически удалён из-за слетевшей сессии.")
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def get_russian_error(error_text: str) -> str:
-    if "Cannot find any entity" in error_text:
+def get_russian_error(e: Exception) -> str:
+    error = str(e)
+    if "Cannot find any entity" in error:
         return "Не удалось найти пользователя или чат. Проверьте ID или username."
-    if "Too many requests" in error_text:
+    if "Too many requests" in error:
         return "Слишком много запросов. Подождите немного."
-    if "FloodWaitError" in error_text or "FLOOD_WAIT" in error_text:
+    if "FloodWaitError" in error:
         return "Превышен лимит запросов. Попробуйте позже."
-    if "AuthKeyError" in error_text or "UnauthorizedError" in error_text:
+    if "AuthKeyError" in error or "UnauthorizedError" in error:
         return "Сессия устарела. Аккаунт будет удалён."
-    if "disconnected" in error_text.lower():
+    if "disconnected" in error:
         return "Соединение разорвано. Попробуйте ещё раз."
-    if "first_name" in error_text:
-        return "Ошибка получения имени пользователя."
-    if "PASSWORD_HASH_INVALID" in error_text:
-        return "Неверный текущий пароль. Сначала снимите 2FA или укажите верный пароль."
-    return error_text
+    if "The message cannot be empty" in error:
+        return "Сообщение не может быть пустым. Добавьте текст или файл."
+    return error
+
+# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ (опционально) ==========
+async def is_subscribed_to_channel(user_id: int) -> bool:
+    if not CHANNEL_USERNAME:
+        return True
+    try:
+        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
+@dp.callback_query(lambda c: c.data not in ["check_sub"])
+async def subscription_middleware(callback: types.CallbackQuery):
+    if not await is_subscribed_to_channel(callback.from_user.id):
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")]
+        ])
+        await callback.message.answer(f"❌ Подпишитесь на @{CHANNEL_USERNAME}", reply_markup=keyboard)
+        await callback.answer()
+        return
+
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(callback: types.CallbackQuery):
+    if await is_subscribed_to_channel(callback.from_user.id):
+        await callback.message.delete()
+        await start_cmd(callback.message)
+    else:
+        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 # ========== КЛАВИАТУРЫ ==========
 def main_menu(tg_id):
@@ -304,7 +407,7 @@ def cube_menu():
         [InlineKeyboardButton(text="Чёт/Нечет (x2)", callback_data="cube_even_odd")],
         [InlineKeyboardButton(text="Угадать число (x6)", callback_data="cube_exact")],
         [InlineKeyboardButton(text="Диапазон (x3)", callback_data="cube_range")],
-        [InlineKeyboardButton(text="Больше 3.5 / Меньше 3.5 (x2)", callback_data="cube_35")],
+        [InlineKeyboardButton(text="Больше/Меньше 3.5 (x2)", callback_data="cube_35")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
     ])
 
@@ -417,6 +520,17 @@ class AdminRemoveBalance(StatesGroup):
     waiting_user_id = State()
     waiting_amount = State()
 
+class AdminBroadcast(StatesGroup):
+    waiting_type = State()
+    waiting_text = State()
+    waiting_photo = State()
+    waiting_confirm = State()
+
+class AdminCreatePromocode(StatesGroup):
+    waiting_code = State()
+    waiting_days = State()
+    waiting_max_uses = State()
+
 class Withdraw(StatesGroup):
     waiting_amount = State()
     waiting_wallet = State()
@@ -456,17 +570,6 @@ class TGAction(StatesGroup):
     waiting_file = State()
     waiting_schedule_delay = State()
 
-class AdminCreatePromocode(StatesGroup):
-    waiting_code = State()
-    waiting_days = State()
-    waiting_max_uses = State()
-
-class AdminBroadcast(StatesGroup):
-    waiting_type = State()      # 'text' или 'photo'
-    waiting_text = State()
-    waiting_photo = State()
-    waiting_confirm = State()
-
 class ActivatePromo(StatesGroup):
     waiting_code = State()
 
@@ -476,87 +579,7 @@ user_game_data = {}
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
-@dp.callback_query(F.data == "add_tg")
-async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    if not is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна платная подписка!", show_alert=True)
-        return
-    await callback.message.answer("📞 Введите номер телефона в формате +79991234567:")
-    await state.set_state(AddTG.waiting_phone)
-    await callback.answer()
-
-@dp.message(AddTG.waiting_phone)
-async def add_tg_phone(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    phone = message.text.strip()
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-    session_file = os.path.join(SESSIONS_DIR, f"{message.from_user.id}_{phone}.session")
-    client = TelegramClient(session_file, API_ID, API_HASH)
-    await client.connect()
-    try:
-        await client.send_code_request(phone)
-        await state.update_data(phone=phone, session_file=session_file, client=client)
-        await message.answer("🔑 Введите код из SMS (код действует 3 минуты):")
-        await state.set_state(AddTG.waiting_code)
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(str(e))}")
-        await state.clear()
-
-@dp.message(AddTG.waiting_code)
-async def add_tg_code(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    code = message.text.strip()
-    data = await state.get_data()
-    client = data["client"]
-    phone = data["phone"]
-    try:
-        await client.sign_in(phone, code)
-        me = await client.get_me()
-        name = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or str(me.id)
-        add_tg_account(message.from_user.id, phone, data["session_file"], name)
-        await show_tg_account_info(message, client, phone)
-        await client.disconnect()
-        await state.clear()
-    except SessionPasswordNeededError:
-        await message.answer("🔒 Введите двухфакторный пароль:")
-        await state.set_state(AddTG.waiting_2fa)
-    except Exception as e:
-        error = str(e)
-        if "expired" in error.lower():
-            await message.answer("❌ Код истёк. Отправляю новый...")
-            await client.send_code_request(phone)
-        else:
-            await message.answer(f"❌ Ошибка: {get_russian_error(error)}")
-            await client.disconnect()
-            await state.clear()
-
-@dp.message(AddTG.waiting_2fa)
-async def add_tg_2fa(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    password = message.text.strip()
-    data = await state.get_data()
-    client = data["client"]
-    try:
-        await client.sign_in(password=password)
-        me = await client.get_me()
-        name = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or str(me.id)
-        add_tg_account(message.from_user.id, data["phone"], data["session_file"], name)
-        await show_tg_account_info(message, client, data["phone"])
-        await client.disconnect()
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(str(e))}")
-        await client.disconnect()
-        await state.clear()
-
-
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async def show_tg_account_info(message: types.Message, client: TelegramClient, phone: str):
     try:
         if not client.is_connected():
@@ -565,19 +588,13 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
         if me is None:
             await message.answer("❌ Не удалось получить информацию об аккаунте.")
             return
-
-        # Страна по коду телефона
-        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США",
-                       "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай",
-                       "91": "🇮🇳 Индия"}
+        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
         country = "Неизвестно"
         if phone and phone.startswith('+'):
             for code in country_map:
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
-
-        # Проверка спам-блока через @Spambot
         spam_status = "✅ Нет ограничений"
         try:
             spambot = await client.get_entity('@Spambot')
@@ -588,41 +605,37 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                     if 'no restrictions' in msg.text.lower():
                         spam_status = "✅ Нет ограничений"
                     elif 'limited' in msg.text.lower() or 'restricted' in msg.text.lower():
-                        spam_status = "⚠️ Есть ограничения (спам-блок активен)"
+                        spam_status = "⚠️ Есть ограничения"
         except:
             spam_status = "❓ Не удалось проверить"
-
-        # Получаем диалоги и контакты
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
-
-        # Взаимные контакты (приблизительно: пользователи, с которыми есть диалог и мы им писали/они писали нам)
-        mutual = 0
-        for user in users[:100]:  # ограничим для скорости
-            try:
-                async for _ in client.iter_messages(user.entity, limit=1):
-                    mutual += 1
-                    break
-            except:
-                pass
-
-        info = (
-            f"📱 *Telegram аккаунт*\n"
-            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone) > 7 else ''}`\n"
-            f"🆔 ID: `{me.id}`\n"
-            f"👤 Имя: {me.first_name or ''} {me.last_name or ''}\n"
-            f"🌍 Страна: {country}\n"
-            f"🔒 Спам-блок: {spam_status}\n"
-            f"👥 Контактов (всего): {total_contacts}\n"
-            f"💬 чатов (всего): {total_dialogs}\n"
-            f"🤝 Взаимных контактов : {mutual}\n"
-            f"✅ Аккаунт подключён!"
-        )
+        mutual = len([u for u in users if u.entity.username and u.entity.username])  # приблизительно
+        info = (f"📱 *Telegram аккаунт*\n📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n🆔 ID: `{me.id}`\n👤 Имя: {me.first_name or ''} {me.last_name or ''}\n🌍 Страна: {country}\n🔒 Спам-блок: {spam_status}\n👥 Контактов (всего): {total_contacts}\n💬 Диалогов (всего): {total_dialogs}\n🤝 Взаимных контактов: {mutual}\n✅ Аккаунт подключён!")
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
-        await message.answer(f"❌ Ошибка получения информации: {get_russian_error(e)}")
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+
+async def show_vk_account_info(message: types.Message, token: str):
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        user = vk.users.get(fields="city, country, followers_count, bdate")[0]
+        user_id = user['id']
+        first_name = user.get('first_name', '')
+        last_name = user.get('last_name', '')
+        city = user.get('city', {}).get('title', 'Не указан')
+        country = user.get('country', {}).get('title', 'Не указана')
+        bdate = user.get('bdate', 'Не указана')
+        followers = user.get('followers_count', 0)
+        friends = vk.friends.get()['count']
+        online = vk.friends.getOnline()['count'] if 'count' in vk.friends.getOnline() else 0
+        info = (f"📘 *VK аккаунт*\n👤 Имя: {first_name} {last_name}\n🆔 ID: {user_id}\n🏙️ Город: {city}\n🌍 Страна: {country}\n🎂 Дата рождения: {bdate}\n👥 Друзей: {friends}\n👁️ Подписчиков: {followers}\n🟢 Онлайн друзей: {online}\n✅ Аккаунт подключён!")
+        await message.answer(info, parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
 
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
