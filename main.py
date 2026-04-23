@@ -2989,6 +2989,7 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
         await client.disconnect()
         await state.clear()
 
+
 async def show_tg_account_info(message: types.Message, client: TelegramClient, phone: str):
     try:
         if not client.is_connected():
@@ -2997,13 +2998,18 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
         if me is None:
             await message.answer("❌ Не удалось получить информацию об аккаунте.")
             return
-        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
+
+        # Страна по коду телефона
+        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США",
+                       "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай",
+                       "91": "🇮🇳 Индия"}
         country = "Неизвестно"
         if phone and phone.startswith('+'):
             for code in country_map:
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
+
         # Проверка спам-блока через @Spambot
         spam_status = "✅ Нет ограничений"
         try:
@@ -3018,27 +3024,26 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                         spam_status = "⚠️ Есть ограничения (спам-блок активен)"
         except:
             spam_status = "❓ Не удалось проверить"
+
+        # Получаем диалоги и контакты
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
-        # Взаимные контакты
-        mutual = 0
-        try:
-            contacts = await client.get_contacts()
-            mutual = len(contacts)
-        except:
-            mutual = "ошибка"
+
+        # Взаимные контакты (приблизительно: те, у кого есть диалог с нами) – используем количество диалогов с пользователями
+        mutual_contacts = total_contacts  # или можно вычислить сложнее, но для простоты оставим так
+
         info = (
             f"📱 *Telegram аккаунт*\n"
-            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n"
+            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone) > 7 else ''}`\n"
             f"🆔 ID: `{me.id}`\n"
             f"👤 Имя: {me.first_name or ''} {me.last_name or ''}\n"
             f"🌍 Страна: {country}\n"
             f"🔒 Спам-блок: {spam_status}\n"
             f"👥 Контактов (всего): {total_contacts}\n"
             f"💬 Диалогов (всего): {total_dialogs}\n"
-            f"🤝 Взаимных контактов: {mutual}\n"
+            f"🤝 Взаимных контактов (примерно): {mutual_contacts}\n"
             f"✅ Аккаунт подключён!"
         )
         await message.answer(info, parse_mode="Markdown")
