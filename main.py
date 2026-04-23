@@ -485,836 +485,811 @@ async def show_vk_account_info(message: types.Message, token: str):
         info = (f"📘 *VK аккаунт*\n👤 Имя: {first_name} {last_name}\n🆔 ID: {user_id}\n🏙️ Город: {city}\n🌍 Страна: {country}\n🎂 Дата рождения: {bdate}\n👥 Друзей: {friends}\n👁️ Подписчиков: {followers}\n🟢 Онлайн друзей: {online}\n✅ Аккаунт подключён!")
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message):
+    if message.chat.type != ChatType.PRIVATE:
+        return
+    create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
+    await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
+
+@dp.callback_query(F.data == "main_menu")
+async def main_menu_callback(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    await callback.message.edit_text("Главное меню", reply_markup=main_menu(callback.from_user.id))
+    await callback.answer()
+
+@dp.callback_query(F.data == "profile")
+async def profile(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    user = get_user(callback.from_user.id)
+    balance = user["balance"]
+    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y %H:%M') if user["sub_until"] else "Нет"
+    text = f"👤 Профиль\n💰 Баланс: {balance:.2f}$\n⏳ Подписка до: {sub_until}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"),
+         InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
+        [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data == "my_accounts")
+async def my_accounts(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "connect_new_account")
+async def connect_new(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    await callback.message.edit_text("Выберите тип аккаунта:", reply_markup=connect_new_menu())
+    await callback.answer()
+
+@dp.callback_query(F.data == "list_tg_accounts")
+async def list_tg_accounts(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    accounts = get_user_tg_accounts(callback.from_user.id)
+    if not accounts:
+        await callback.message.edit_text("У вас нет Telegram аккаунтов. Подключите новый.", reply_markup=back_button("my_accounts"))
+        await callback.answer()
+        return
+    await callback.message.edit_text("Выберите аккаунт:", reply_markup=tg_accounts_list(callback.from_user.id))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("tg_acc_"))
+async def tg_account_actions(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    accounts = get_user_tg_accounts(callback.from_user.id)
+    acc = next((a for a in accounts if a["id"] == acc_id), None)
+    if not acc:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Сделать активным" if not acc["is_active"] else "✅ Активен", callback_data=f"tg_set_active_{acc_id}")],
+        [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"tg_broadcast_{acc_id}")],
+        [InlineKeyboardButton(text="💬 Вступить в группу/канал", callback_data=f"tg_join_{acc_id}")],
+        [InlineKeyboardButton(text="🚪 Выйти из чата", callback_data=f"tg_leave_{acc_id}")],
+        [InlineKeyboardButton(text="✏️ Отправить сообщение", callback_data=f"tg_send_msg_{acc_id}")],
+        [InlineKeyboardButton(text="🖼️ Отправить фото", callback_data=f"tg_send_photo_{acc_id}")],
+        [InlineKeyboardButton(text="📄 Отправить документ", callback_data=f"tg_send_doc_{acc_id}")],
+        [InlineKeyboardButton(text="⏰ Отложенная отправка", callback_data=f"tg_schedule_{acc_id}")],
+        [InlineKeyboardButton(text="📋 Список диалогов", callback_data=f"tg_dialogs_{acc_id}")],
+        [InlineKeyboardButton(text="🔐 Завершить все сессии", callback_data=f"tg_terminate_{acc_id}")],
+        [InlineKeyboardButton(text="🔄 Обновить информацию", callback_data=f"tg_refresh_info_{acc_id}")],
+        [InlineKeyboardButton(text="🖌️ Сменить аватарку", callback_data=f"tg_change_avatar_{acc_id}")],
+        [InlineKeyboardButton(text="🔑 Установить облачный пароль", callback_data=f"tg_cloud_password_{acc_id}")],
+        [InlineKeyboardButton(text="📲 Запросить код для входа", callback_data=f"tg_request_code_{acc_id}")],
+        [InlineKeyboardButton(text="✏️ Сменить имя", callback_data=f"tg_change_name_{acc_id}")],
+        [InlineKeyboardButton(text="📛 Сменить username", callback_data=f"tg_change_username_{acc_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"tg_del_{acc_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="list_tg_accounts")]
+    ])
+    await callback.message.edit_text(f"Аккаунт: {acc['name']} ({acc['phone']})\nВыберите действие:", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("tg_set_active_"))
+async def tg_set_active(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    set_active_tg_account(callback.from_user.id, acc_id)
+    await callback.answer("Аккаунт установлен как активный!", show_alert=True)
+    await list_tg_accounts(callback)
+
+@dp.callback_query(F.data.startswith("tg_del_"))
+async def tg_delete(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    delete_tg_account(callback.from_user.id, acc_id)
+    await callback.answer("Аккаунт удалён", show_alert=True)
+    await list_tg_accounts(callback)
+
+# ========== УПРАВЛЕНИЕ АККАУНТОМ ==========
+@dp.callback_query(F.data.startswith("tg_change_avatar_"))
+async def tg_change_avatar_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Пришлите новое фото для аватарки:")
+    await state.set_state(ManageTG.waiting_new_avatar)
+    await callback.answer()
+
+@dp.message(ManageTG.waiting_new_avatar, F.photo)
+async def tg_change_avatar_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        photo = message.photo[-1]
+        file = await message.bot.get_file(photo.file_id)
+        file_path = f"/tmp/{photo.file_id}.jpg"
+        await message.bot.download_file(file.file_path, file_path)
+        await client(UploadProfilePhotoRequest(file=await client.upload_file(file_path)))
+        await message.answer("✅ Аватарка успешно изменена!")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
-        @dp.message(Command("start"))
-        async def start_cmd(message: types.Message):
-            if message.chat.type != ChatType.PRIVATE:
-                return
-            create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
-            await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.",
-                                 reply_markup=main_menu(message.from_user.id))
+# Установка облачного пароля (2FA) – РАБОТАЕТ!
+@dp.callback_query(F.data.startswith("tg_cloud_password_"))
+async def tg_cloud_password_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("🔐 Введите новый облачный пароль (минимум 8 символов):")
+    await state.set_state(ManageTG.waiting_cloud_password)
+    await callback.answer()
 
-        @dp.callback_query(F.data == "main_menu")
-        async def main_menu_callback(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            await callback.message.edit_text("Главное меню", reply_markup=main_menu(callback.from_user.id))
-            await callback.answer()
+@dp.message(ManageTG.waiting_cloud_password)
+async def tg_cloud_password_set(message: types.Message, state: FSMContext):
+    password = message.text.strip()
+    if len(password) < 8:
+        await message.answer("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
+        return
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        await client.edit_2fa(password=password)
+        await message.answer("✅ Облачный пароль (2FA) успешно установлен!")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data == "profile")
-        async def profile(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            user = get_user(callback.from_user.id)
-            balance = user["balance"]
-            sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y %H:%M') if user[
-                "sub_until"] else "Нет"
-            text = f"👤 Профиль\n💰 Баланс: {balance:.2f}$\n⏳ Подписка до: {sub_until}"
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"),
-                 InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
-                [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-            ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_request_code_"))
+async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, callback.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.send_code_request(phone)
+        await callback.message.answer(f"✅ Код подтверждения отправлен на номер {phone}.")
+        await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
+        await state.set_state(ManageTG.waiting_code_for_login)
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+    await callback.answer()
 
-        @dp.callback_query(F.data == "my_accounts")
-        async def my_accounts(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
-            await callback.answer()
+@dp.message(ManageTG.waiting_code_for_login)
+async def tg_verify_code(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    phone = data["phone"]
+    session_file = data["session_file"]
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.sign_in(phone, code)
+        await message.answer("✅ Код подтверждён. Аккаунт активен.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data == "connect_new_account")
-        async def connect_new(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            await callback.message.edit_text("Выберите тип аккаунта:", reply_markup=connect_new_menu())
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_change_name_"))
+async def tg_change_name_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите новое имя (first name):")
+    await state.set_state(ManageTG.waiting_new_name)
+    await callback.answer()
 
-        @dp.callback_query(F.data == "list_tg_accounts")
-        async def list_tg_accounts(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            accounts = get_user_tg_accounts(callback.from_user.id)
-            if not accounts:
-                await callback.message.edit_text("У вас нет Telegram аккаунтов. Подключите новый.",
-                                                 reply_markup=back_button("my_accounts"))
-                await callback.answer()
-                return
-            await callback.message.edit_text("Выберите аккаунт:", reply_markup=tg_accounts_list(callback.from_user.id))
-            await callback.answer()
+@dp.message(ManageTG.waiting_new_name)
+async def tg_change_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    new_name = message.text.strip()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        await client(UpdateProfileRequest(first_name=new_name))
+        await message.answer(f"✅ Имя успешно изменено на {new_name}")
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE tg_accounts SET name=? WHERE id=?", (new_name, acc_id))
+        conn.commit()
+        conn.close()
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_acc_"))
-        async def tg_account_actions(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            accounts = get_user_tg_accounts(callback.from_user.id)
-            acc = next((a for a in accounts if a["id"] == acc_id), None)
-            if not acc:
-                await callback.answer("Аккаунт не найден", show_alert=True)
-                return
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Сделать активным" if not acc["is_active"] else "✅ Активен",
-                                      callback_data=f"tg_set_active_{acc_id}")],
-                [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"tg_broadcast_{acc_id}")],
-                [InlineKeyboardButton(text="💬 Вступить в группу/канал", callback_data=f"tg_join_{acc_id}")],
-                [InlineKeyboardButton(text="🚪 Выйти из чата", callback_data=f"tg_leave_{acc_id}")],
-                [InlineKeyboardButton(text="✏️ Отправить сообщение", callback_data=f"tg_send_msg_{acc_id}")],
-                [InlineKeyboardButton(text="🖼️ Отправить фото", callback_data=f"tg_send_photo_{acc_id}")],
-                [InlineKeyboardButton(text="📄 Отправить документ", callback_data=f"tg_send_doc_{acc_id}")],
-                [InlineKeyboardButton(text="⏰ Отложенная отправка", callback_data=f"tg_schedule_{acc_id}")],
-                [InlineKeyboardButton(text="📋 Список диалогов", callback_data=f"tg_dialogs_{acc_id}")],
-                [InlineKeyboardButton(text="🔐 Завершить все сессии", callback_data=f"tg_terminate_{acc_id}")],
-                [InlineKeyboardButton(text="🔄 Обновить информацию", callback_data=f"tg_refresh_info_{acc_id}")],
-                [InlineKeyboardButton(text="🖌️ Сменить аватарку", callback_data=f"tg_change_avatar_{acc_id}")],
-                [InlineKeyboardButton(text="🔑 Установить облачный пароль",
-                                      callback_data=f"tg_cloud_password_{acc_id}")],
-                [InlineKeyboardButton(text="📲 Запросить код для входа", callback_data=f"tg_request_code_{acc_id}")],
-                [InlineKeyboardButton(text="✏️ Сменить имя", callback_data=f"tg_change_name_{acc_id}")],
-                [InlineKeyboardButton(text="📛 Сменить username", callback_data=f"tg_change_username_{acc_id}")],
-                [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"tg_del_{acc_id}")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="list_tg_accounts")]
-            ])
-            await callback.message.edit_text(f"Аккаунт: {acc['name']} ({acc['phone']})\nВыберите действие:",
-                                             reply_markup=keyboard)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_change_username_"))
+async def tg_change_username_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите новый username (без @):")
+    await state.set_state(ManageTG.waiting_new_username)
+    await callback.answer()
 
-        @dp.callback_query(F.data.startswith("tg_set_active_"))
-        async def tg_set_active(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            set_active_tg_account(callback.from_user.id, acc_id)
-            await callback.answer("Аккаунт установлен как активный!", show_alert=True)
-            await list_tg_accounts(callback)
+@dp.message(ManageTG.waiting_new_username)
+async def tg_change_username(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    new_username = message.text.strip()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        await client(UpdateUsernameRequest(username=new_username))
+        await message.answer(f"✅ Username успешно изменён на @{new_username}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_del_"))
-        async def tg_delete(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            delete_tg_account(callback.from_user.id, acc_id)
-            await callback.answer("Аккаунт удалён", show_alert=True)
-            await list_tg_accounts(callback)
+# ========== ОТПРАВКА СООБЩЕНИЙ, ФОТО, ДОКУМЕНТОВ, ОТЛОЖЕННАЯ ОТПРАВКА ==========
+@dp.callback_query(F.data.startswith("tg_send_msg_"))
+async def tg_send_msg_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ID или username получателя (например, @username или 123456789):")
+    await state.set_state(TGAction.waiting_target)
+    await callback.answer()
 
-        # ========== УПРАВЛЕНИЕ АККАУНТОМ ==========
-        @dp.callback_query(F.data.startswith("tg_change_avatar_"))
-        async def tg_change_avatar_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Пришлите новое фото для аватарки:")
-            await state.set_state(ManageTG.waiting_new_avatar)
-            await callback.answer()
+@dp.message(TGAction.waiting_target)
+async def tg_send_target(message: types.Message, state: FSMContext):
+    await state.update_data(target=message.text.strip())
+    await message.answer("Введите текст сообщения:")
+    await state.set_state(TGAction.waiting_message)
 
-        @dp.message(ManageTG.waiting_new_avatar, F.photo)
-        async def tg_change_avatar_photo(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                photo = message.photo[-1]
-                file = await message.bot.get_file(photo.file_id)
-                file_path = f"/tmp/{photo.file_id}.jpg"
-                await message.bot.download_file(file.file_path, file_path)
-                await client(UploadProfilePhotoRequest(file=await client.upload_file(file_path)))
-                await message.answer("✅ Аватарка успешно изменена!")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_message)
+async def tg_send_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    target = data["target"]
+    text = message.text
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        entity = await client.get_entity(target)
+        await client.send_message(entity, text)
+        await message.answer(f"✅ Сообщение отправлено в {target}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        # Установка облачного пароля (2FA) – РАБОТАЕТ!
-        @dp.callback_query(F.data.startswith("tg_cloud_password_"))
-        async def tg_cloud_password_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("🔐 Введите новый облачный пароль (минимум 8 символов):")
-            await state.set_state(ManageTG.waiting_cloud_password)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_send_photo_"))
+async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ID или username получателя:")
+    await state.set_state(TGAction.waiting_target)
+    await callback.answer()
 
-        @dp.message(ManageTG.waiting_cloud_password)
-        async def tg_cloud_password_set(message: types.Message, state: FSMContext):
-            password = message.text.strip()
-            if len(password) < 8:
-                await message.answer("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
-                return
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                await client.edit_2fa(password=password)
-                await message.answer("✅ Облачный пароль (2FA) успешно установлен!")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_target)
+async def tg_photo_target(message: types.Message, state: FSMContext):
+    await state.update_data(target=message.text.strip())
+    await message.answer("Пришлите фото:")
+    await state.set_state(TGAction.waiting_photo)
 
-        @dp.callback_query(F.data.startswith("tg_request_code_"))
-        async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, callback.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await callback.answer("Аккаунт не найден", show_alert=True)
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.send_code_request(phone)
-                await callback.message.answer(f"✅ Код подтверждения отправлен на номер {phone}.")
-                await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
-                await state.set_state(ManageTG.waiting_code_for_login)
-            except Exception as e:
-                await callback.message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-            await callback.answer()
+@dp.message(TGAction.waiting_photo, F.photo)
+async def tg_send_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    target = data["target"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        entity = await client.get_entity(target)
+        photo = message.photo[-1]
+        file = await message.bot.get_file(photo.file_id)
+        file_path = f"/tmp/{photo.file_id}.jpg"
+        await message.bot.download_file(file.file_path, file_path)
+        await client.send_file(entity, file_path)
+        await message.answer(f"✅ Фото отправлено в {target}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.message(ManageTG.waiting_code_for_login)
-        async def tg_verify_code(message: types.Message, state: FSMContext):
-            code = message.text.strip()
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            phone = data["phone"]
-            session_file = data["session_file"]
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.sign_in(phone, code)
-                await message.answer("✅ Код подтверждён. Аккаунт активен.")
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.callback_query(F.data.startswith("tg_send_doc_"))
+async def tg_send_doc_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ID или username получателя:")
+    await state.set_state(TGAction.waiting_target)
+    await callback.answer()
 
-        @dp.callback_query(F.data.startswith("tg_change_name_"))
-        async def tg_change_name_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите новое имя (first name):")
-            await state.set_state(ManageTG.waiting_new_name)
-            await callback.answer()
+@dp.message(TGAction.waiting_target)
+async def tg_doc_target(message: types.Message, state: FSMContext):
+    await state.update_data(target=message.text.strip())
+    await message.answer("Пришлите документ (файл):")
+    await state.set_state(TGAction.waiting_file)
 
-        @dp.message(ManageTG.waiting_new_name)
-        async def tg_change_name(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            new_name = message.text.strip()
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                await client(UpdateProfileRequest(first_name=new_name))
-                await message.answer(f"✅ Имя успешно изменено на {new_name}")
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE tg_accounts SET name=? WHERE id=?", (new_name, acc_id))
-                conn.commit()
-                conn.close()
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_file, F.document)
+async def tg_send_doc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    target = data["target"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        entity = await client.get_entity(target)
+        doc = message.document
+        file = await message.bot.get_file(doc.file_id)
+        file_path = f"/tmp/{doc.file_id}"
+        await message.bot.download_file(file.file_path, file_path)
+        await client.send_file(entity, file_path)
+        await message.answer(f"✅ Документ отправлен в {target}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_change_username_"))
-        async def tg_change_username_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите новый username (без @):")
-            await state.set_state(ManageTG.waiting_new_username)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_schedule_"))
+async def tg_schedule_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ID или username получателя:")
+    await state.set_state(TGAction.waiting_target)
+    await callback.answer()
 
-        @dp.message(ManageTG.waiting_new_username)
-        async def tg_change_username(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            new_username = message.text.strip()
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                await client(UpdateUsernameRequest(username=new_username))
-                await message.answer(f"✅ Username успешно изменён на @{new_username}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_target)
+async def tg_schedule_target(message: types.Message, state: FSMContext):
+    await state.update_data(target=message.text.strip())
+    await message.answer("Введите текст сообщения:")
+    await state.set_state(TGAction.waiting_message)
 
-        # ========== ОТПРАВКА СООБЩЕНИЙ, ФОТО, ДОКУМЕНТОВ, ОТЛОЖЕННАЯ ОТПРАВКА ==========
-        @dp.callback_query(F.data.startswith("tg_send_msg_"))
-        async def tg_send_msg_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ID или username получателя (например, @username или 123456789):")
-            await state.set_state(TGAction.waiting_target)
-            await callback.answer()
+@dp.message(TGAction.waiting_message)
+async def tg_schedule_text(message: types.Message, state: FSMContext):
+    await state.update_data(message_text=message.text)
+    await message.answer("Введите задержку в секундах (например, 60):")
+    await state.set_state(TGAction.waiting_schedule_delay)
 
-        @dp.message(TGAction.waiting_target)
-        async def tg_send_target(message: types.Message, state: FSMContext):
-            await state.update_data(target=message.text.strip())
-            await message.answer("Введите текст сообщения:")
-            await state.set_state(TGAction.waiting_message)
-
-        @dp.message(TGAction.waiting_message)
-        async def tg_send_text(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            target = data["target"]
-            text = message.text
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                entity = await client.get_entity(target)
-                await client.send_message(entity, text)
-                await message.answer(f"✅ Сообщение отправлено в {target}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
-
-        @dp.callback_query(F.data.startswith("tg_send_photo_"))
-        async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ID или username получателя:")
-            await state.set_state(TGAction.waiting_target)
-            await callback.answer()
-
-        @dp.message(TGAction.waiting_target)
-        async def tg_photo_target(message: types.Message, state: FSMContext):
-            await state.update_data(target=message.text.strip())
-            await message.answer("Пришлите фото:")
-            await state.set_state(TGAction.waiting_photo)
-
-        @dp.message(TGAction.waiting_photo, F.photo)
-        async def tg_send_photo(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            target = data["target"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                entity = await client.get_entity(target)
-                photo = message.photo[-1]
-                file = await message.bot.get_file(photo.file_id)
-                file_path = f"/tmp/{photo.file_id}.jpg"
-                await message.bot.download_file(file.file_path, file_path)
-                await client.send_file(entity, file_path)
-                await message.answer(f"✅ Фото отправлено в {target}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
-
-        @dp.callback_query(F.data.startswith("tg_send_doc_"))
-        async def tg_send_doc_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ID или username получателя:")
-            await state.set_state(TGAction.waiting_target)
-            await callback.answer()
-
-        @dp.message(TGAction.waiting_target)
-        async def tg_doc_target(message: types.Message, state: FSMContext):
-            await state.update_data(target=message.text.strip())
-            await message.answer("Пришлите документ (файл):")
-            await state.set_state(TGAction.waiting_file)
-
-        @dp.message(TGAction.waiting_file, F.document)
-        async def tg_send_doc(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            target = data["target"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                entity = await client.get_entity(target)
-                doc = message.document
-                file = await message.bot.get_file(doc.file_id)
-                file_path = f"/tmp/{doc.file_id}"
-                await message.bot.download_file(file.file_path, file_path)
-                await client.send_file(entity, file_path)
-                await message.answer(f"✅ Документ отправлен в {target}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
-
-        @dp.callback_query(F.data.startswith("tg_schedule_"))
-        async def tg_schedule_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ID или username получателя:")
-            await state.set_state(TGAction.waiting_target)
-            await callback.answer()
-
-        @dp.message(TGAction.waiting_target)
-        async def tg_schedule_target(message: types.Message, state: FSMContext):
-            await state.update_data(target=message.text.strip())
-            await message.answer("Введите текст сообщения:")
-            await state.set_state(TGAction.waiting_message)
-
-        @dp.message(TGAction.waiting_message)
-        async def tg_schedule_text(message: types.Message, state: FSMContext):
-            await state.update_data(message_text=message.text)
-            await message.answer("Введите задержку в секундах (например, 60):")
-            await state.set_state(TGAction.waiting_schedule_delay)
-
-        @dp.message(TGAction.waiting_schedule_delay)
-        async def tg_schedule_delay(message: types.Message, state: FSMContext):
-            try:
-                delay = int(message.text.strip())
-                if delay <= 0:
-                    raise ValueError
-                data = await state.get_data()
-                acc_id = data["acc_id"]
-                target = data["target"]
-                text = data["message_text"]
-                await message.answer(f"⏳ Сообщение будет отправлено через {delay} секунд.")
-                await asyncio.sleep(delay)
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                          (acc_id, message.from_user.id))
-                row = c.fetchone()
-                conn.close()
-                if not row:
-                    await message.answer("Аккаунт не найден")
-                    await state.clear()
-                    return
-                session_file, phone = row
-                client = TelegramClient(session_file, API_ID, API_HASH)
-                await client.connect()
-                try:
-                    await client.get_me()
-                    entity = await client.get_entity(target)
-                    await client.send_message(entity, text)
-                    await message.answer(f"✅ Отложенное сообщение отправлено в {target}")
-                except (AuthKeyError, UnauthorizedError):
-                    await handle_session_error(message.from_user.id, acc_id, phone)
-                except Exception as e:
-                    await message.answer(f"❌ Ошибка: {e}")
-                finally:
-                    await client.disconnect()
-            except:
-                await message.answer("Введите корректное число секунд")
+@dp.message(TGAction.waiting_schedule_delay)
+async def tg_schedule_delay(message: types.Message, state: FSMContext):
+    try:
+        delay = int(message.text.strip())
+        if delay <= 0:
+            raise ValueError
+        data = await state.get_data()
+        acc_id = data["acc_id"]
+        target = data["target"]
+        text = data["message_text"]
+        await message.answer(f"⏳ Сообщение будет отправлено через {delay} секунд.")
+        await asyncio.sleep(delay)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await message.answer("Аккаунт не найден")
             await state.clear()
+            return
+        session_file, phone = row
+        client = TelegramClient(session_file, API_ID, API_HASH)
+        await client.connect()
+        try:
+            await client.get_me()
+            entity = await client.get_entity(target)
+            await client.send_message(entity, text)
+            await message.answer(f"✅ Отложенное сообщение отправлено в {target}")
+        except (AuthKeyError, UnauthorizedError):
+            await handle_session_error(message.from_user.id, acc_id, phone)
+        except Exception as e:
+            await message.answer(f"❌ Ошибка: {e}")
+        finally:
+            await client.disconnect()
+    except:
+        await message.answer("Введите корректное число секунд")
+    await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_dialogs_"))
-        async def tg_dialogs_start(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, callback.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await callback.answer("Аккаунт не найден", show_alert=True)
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                dialogs = await client.get_dialogs()
-                text = "📋 Список диалогов (первые 20):\n"
-                for i, d in enumerate(dialogs[:20]):
-                    name = d.name or str(d.entity.id)
-                    text += f"{i + 1}. {name} (ID: {d.entity.id})\n"
-                await callback.message.answer(text)
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(callback.from_user.id, acc_id, phone)
-            except Exception as e:
-                await callback.message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_dialogs_"))
+async def tg_dialogs_start(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, callback.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        dialogs = await client.get_dialogs()
+        text = "📋 Список диалогов (первые 20):\n"
+        for i, d in enumerate(dialogs[:20]):
+            name = d.name or str(d.entity.id)
+            text += f"{i+1}. {name} (ID: {d.entity.id})\n"
+        await callback.message.answer(text)
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(callback.from_user.id, acc_id, phone)
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+    await callback.answer()
 
-        @dp.callback_query(F.data.startswith("tg_terminate_"))
-        async def tg_terminate_sessions(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, callback.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await callback.answer("Аккаунт не найден", show_alert=True)
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                await client.get_me()
-                await client.log_out()
-                await callback.message.answer("✅ Все сессии завершены. Аккаунт будет удалён из списка.")
-                deactivate_tg_account(callback.from_user.id, acc_id)
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(callback.from_user.id, acc_id, phone)
-            except Exception as e:
-                await callback.message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_terminate_"))
+async def tg_terminate_sessions(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, callback.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        await client.log_out()
+        await callback.message.answer("✅ Все сессии завершены. Аккаунт будет удалён из списка.")
+        deactivate_tg_account(callback.from_user.id, acc_id)
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(callback.from_user.id, acc_id, phone)
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+    await callback.answer()
 
-        @dp.callback_query(F.data.startswith("tg_refresh_info_"))
-        async def tg_refresh_info(callback: types.CallbackQuery):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[3])
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, callback.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await callback.answer("Аккаунт не найден", show_alert=True)
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            try:
-                me = await client.get_me()
-                name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE tg_accounts SET name=? WHERE id=?", (name, acc_id))
-                conn.commit()
-                conn.close()
-                await callback.message.answer(f"✅ Информация обновлена: {name}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(callback.from_user.id, acc_id, phone)
-            except Exception as e:
-                await callback.message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_refresh_info_"))
+async def tg_refresh_info(callback: types.CallbackQuery):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[3])
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, callback.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        me = await client.get_me()
+        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE tg_accounts SET name=? WHERE id=?", (name, acc_id))
+        conn.commit()
+        conn.close()
+        await callback.message.answer(f"✅ Информация обновлена: {name}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(callback.from_user.id, acc_id, phone)
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+    await callback.answer()
 
-        @dp.callback_query(F.data.startswith("tg_join_"))
-        async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ссылку или username группы/канала:")
-            await state.set_state(TGAction.waiting_join_link)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_join_"))
+async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ссылку или username группы/канала:")
+    await state.set_state(TGAction.waiting_join_link)
+    await callback.answer()
 
-        @dp.message(TGAction.waiting_join_link)
-        async def tg_join_execute(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            link = message.text.strip()
-            try:
-                await client.get_me()
-                if "joinchat" in link:
-                    hash_match = re.search(r'joinchat/([A-Za-z0-9_-]+)', link)
-                    if hash_match:
-                        await client(ImportChatInviteRequest(hash_match.group(1)))
-                        await message.answer("✅ Вступил(а) по ссылке-приглашению")
-                    else:
-                        raise Exception("Не удалось распознать ссылку")
-                else:
-                    entity = await client.get_entity(link)
-                    await client(JoinChannelRequest(entity))
-                await message.answer(f"✅ Вступил(а) в {link}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_join_link)
+async def tg_join_execute(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    link = message.text.strip()
+    try:
+        await client.get_me()
+        if "joinchat" in link:
+            hash_match = re.search(r'joinchat/([A-Za-z0-9_-]+)', link)
+            if hash_match:
+                await client(ImportChatInviteRequest(hash_match.group(1)))
+                await message.answer("✅ Вступил(а) по ссылке-приглашению")
+            else:
+                raise Exception("Не удалось распознать ссылку")
+        else:
+            entity = await client.get_entity(link)
+            await client(JoinChannelRequest(entity))
+        await message.answer(f"✅ Вступил(а) в {link}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_leave_"))
-        async def tg_leave_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("Введите ID или username чата/группы:")
-            await state.set_state(TGAction.waiting_target)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_leave_"))
+async def tg_leave_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите ID или username чата/группы:")
+    await state.set_state(TGAction.waiting_target)
+    await callback.answer()
 
-        @dp.message(TGAction.waiting_target)
-        async def tg_leave_execute(message: types.Message, state: FSMContext):
-            data = await state.get_data()
-            acc_id = data["acc_id"]
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                      (acc_id, message.from_user.id))
-            row = c.fetchone()
-            conn.close()
-            if not row:
-                await message.answer("Аккаунт не найден")
-                await state.clear()
-                return
-            session_file, phone = row
-            client = TelegramClient(session_file, API_ID, API_HASH)
-            await client.connect()
-            target = message.text.strip()
-            try:
-                await client.get_me()
-                entity = await client.get_entity(target)
-                await client.delete_dialog(entity)
-                await message.answer(f"✅ Вышел(а) из чата {target}")
-            except (AuthKeyError, UnauthorizedError):
-                await handle_session_error(message.from_user.id, acc_id, phone)
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-            finally:
-                await client.disconnect()
-                await state.clear()
+@dp.message(TGAction.waiting_target)
+async def tg_leave_execute(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await message.answer("Аккаунт не найден")
+        await state.clear()
+        return
+    session_file, phone = row
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    target = message.text.strip()
+    try:
+        await client.get_me()
+        entity = await client.get_entity(target)
+        await client.delete_dialog(entity)
+        await message.answer(f"✅ Вышел(а) из чата {target}")
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(message.from_user.id, acc_id, phone)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    finally:
+        await client.disconnect()
+        await state.clear()
 
-        @dp.callback_query(F.data.startswith("tg_broadcast_"))
-        async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-            if callback.message.chat.type != ChatType.PRIVATE:
-                await callback.answer("Только в ЛС", show_alert=True)
-                return
-            acc_id = int(callback.data.split("_")[2])
-            await state.update_data(acc_id=acc_id)
-            await callback.message.answer("📝 Введите текст рассылки:")
-            await state.set_state(BroadcastTG.waiting_text)
-            await callback.answer()
+@dp.callback_query(F.data.startswith("tg_broadcast_"))
+async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("📝 Введите текст рассылки:")
+    await state.set_state(BroadcastTG.waiting_text)
+    await callback.answer()
 
-        @dp.message(BroadcastTG.waiting_text)
-        async def broadcast_tg_text(message: types.Message, state: FSMContext):
-            await state.update_data(text=message.text)
-            await message.answer("⏱ Введите задержку между сообщениями (сек, рекомендуется 5):")
-            await state.set_state(BroadcastTG.waiting_delay)
+@dp.message(BroadcastTG.waiting_text)
+async def broadcast_tg_text(message: types.Message, state: FSMContext):
+    await state.update_data(text=message.text)
+    await message.answer("⏱ Введите задержку между сообщениями (сек, рекомендуется 5):")
+    await state.set_state(BroadcastTG.waiting_delay)
 
-        @dp.message(BroadcastTG.waiting_delay)
-        async def broadcast_tg_delay(message: types.Message, state: FSMContext):
-            try:
-                delay = float(message.text.strip())
-                if delay < 2:
-                    await message.answer("⚠️ Слишком маленькая задержка. Установлено 2 сек.")
-                    delay = 2
-                data = await state.get_data()
-                text = data["text"]
-                acc_id = data["acc_id"]
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-                          (acc_id, message.from_user.id))
-                row = c.fetchone()
-                conn.close()
-                if not row:
-                    await message.answer("Аккаунт не найден")
-                    await state.clear()
-                    return
-                session_file, phone = row
-                client = TelegramClient(session_file, API_ID, API_HASH)
-                await client.connect()
+@dp.message(BroadcastTG.waiting_delay)
+async def broadcast_tg_delay(message: types.Message, state: FSMContext):
+    try:
+        delay = float(message.text.strip())
+        if delay < 2:
+            await message.answer("⚠️ Слишком маленькая задержка. Установлено 2 сек.")
+            delay = 2
+        data = await state.get_data()
+        text = data["text"]
+        acc_id = data["acc_id"]
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await message.answer("Аккаунт не найден")
+            await state.clear()
+            return
+        session_file, phone = row
+        client = TelegramClient(session_file, API_ID, API_HASH)
+        await client.connect()
+        try:
+            await client.get_me()
+            dialogs = await client.get_dialogs()
+            targets = [d for d in dialogs if d.is_user]
+            total = len(targets)
+            await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
+            sent = 0
+            for dialog in targets:
                 try:
-                    await client.get_me()
-                    dialogs = await client.get_dialogs()
-                    targets = [d for d in dialogs if d.is_user]
-                    total = len(targets)
-                    await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
-                    sent = 0
-                    for dialog in targets:
-                        try:
-                            await client.send_message(dialog.entity, text)
-                            sent += 1
-                            await asyncio.sleep(delay)
-                        except FloodWaitError as e:
-                            await asyncio.sleep(e.seconds)
-                            try:
-                                await client.send_message(dialog.entity, text)
-                                sent += 1
-                            except:
-                                continue
-                        except Exception:
-                            continue
-                    await message.answer(f"✅ Отправлено {sent} из {total}")
-                except (AuthKeyError, UnauthorizedError):
-                    await handle_session_error(message.from_user.id, acc_id, phone)
-                finally:
-                    await client.disconnect()
-                    await state.clear()
-            except Exception as e:
-                await message.answer(f"❌ Ошибка: {e}")
-                await state.clear()
-
-# ========== VK АККАУНТЫ ==========
+                    await client.send_message(dialog.entity, text)
+                    sent += 1
+                    await asyncio.sleep(delay)
+                except FloodWaitError as e:
+                    await asyncio.sleep(e.seconds)
+                    try:
+                        await client.send_message(dialog.entity, text)
+                        sent += 1
+                    except:
+                        continue
+                except Exception:
+                    continue
+            await message.answer(f"✅ Отправлено {sent} из {total}")
+        except (AuthKeyError, UnauthorizedError):
+            await handle_session_error(message.from_user.id, acc_id, phone)
+        finally:
+            await client.disconnect()
+            await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+        await state.clear()# ========== VK АККАУНТЫ ==========
 @dp.callback_query(F.data == "list_vk_accounts")
 async def list_vk_accounts(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
