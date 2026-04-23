@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 import aiohttp
 import random
+import logging
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -23,16 +24,17 @@ from telethon.tl.functions.photos import UploadProfilePhotoRequest
 from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError
 import vk_api
 
-# ========== КОНФИГ (ЗАМЕНИТЕ НА СВОИ) ==========
+logging.basicConfig(level=logging.INFO)
+
+# ========== КОНФИГ ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")   # канал для подписки (без @)
 
 if not BOT_TOKEN or not API_ID or not API_HASH:
-    raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
+    raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set")
 
 DB_PATH = "bot.db"
 SESSIONS_DIR = "/tmp/sessions" if os.name != 'nt' else "sessions"
@@ -50,15 +52,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS withdraw_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL, wallet TEXT, status TEXT DEFAULT 'pending')''')
     c.execute('''CREATE TABLE IF NOT EXISTS promocodes (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, days INTEGER, uses INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS used_promocodes (user_id INTEGER, code_id INTEGER, used_at INTEGER)''')
-    try:
-        c.execute("ALTER TABLE tg_accounts ADD COLUMN name TEXT DEFAULT ''")
-    except: pass
-    try:
-        c.execute("ALTER TABLE tg_accounts ADD COLUMN last_used INTEGER DEFAULT 0")
-    except: pass
-    try:
-        c.execute("ALTER TABLE vk_accounts ADD COLUMN is_active INTEGER DEFAULT 1")
-    except: pass
     conn.commit()
     conn.close()
 
@@ -317,7 +310,6 @@ def get_russian_error(e: Exception) -> str:
         return "Сообщение не может быть пустым. Добавьте текст или файл."
     return error
 
-
 # ========== КЛАВИАТУРЫ ==========
 def main_menu(tg_id):
     buttons = [
@@ -411,7 +403,7 @@ def vk_accounts_list(user_id):
 def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
-        [InlineKeyboardButton(text="👥 Пользователи >", callback_data="admin_users_page")],  # пагинация
+        [InlineKeyboardButton(text="👥 Пользователи >", callback_data="admin_users_page")],
         [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"),
          InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
         [InlineKeyboardButton(text="📢 Глобал рассылка", callback_data="admin_broadcast")],
@@ -433,7 +425,7 @@ def after_game_menu():
 def back_button(callback_data):
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=callback_data)]])
 
-# ========== FSM ==========
+# ========== FSM СОСТОЯНИЯ ==========
 class AddTG(StatesGroup):
     waiting_phone = State()
     waiting_code = State()
@@ -515,16 +507,13 @@ user_game_data = {}
 
 # ========== БОТ И ДИСПЕТЧЕР ==========
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-
+dp = Dispatcher(storage=MemoryStorage())# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
-
-
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
@@ -636,7 +625,7 @@ async def tg_delete(callback: types.CallbackQuery):
     await callback.answer("Аккаунт удалён", show_alert=True)
     await list_tg_accounts(callback)
 
-# ========== УПРАВЛЕНИЕ АККАУНТОМ ==========
+# ========== УПРАВЛЕНИЕ АККАУНТОМ (аватар, пароль, имя, username) ==========
 @dp.callback_query(F.data.startswith("tg_change_avatar_"))
 async def tg_change_avatar_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -877,10 +866,7 @@ async def tg_send_msg_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(TGAction.waiting_target)
 async def tg_send_target(message: types.Message, state: FSMContext):
     raw = message.text.strip()
-    if raw.replace('-', '').isdigit():
-        target = raw
-    else:
-        target = raw
+    target = raw if raw.replace('-', '').isdigit() else raw
     await state.update_data(target=target)
     await message.answer("Введите текст сообщения:")
     await state.set_state(TGAction.waiting_message)
@@ -938,10 +924,7 @@ async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(TGAction.waiting_target)
 async def tg_photo_target(message: types.Message, state: FSMContext):
     raw = message.text.strip()
-    if raw.replace('-', '').isdigit():
-        target = raw
-    else:
-        target = raw
+    target = raw if raw.replace('-', '').isdigit() else raw
     await state.update_data(target=target)
     await message.answer("Пришлите фото (можно с подписью):")
     await state.set_state(TGAction.waiting_photo)
@@ -1001,10 +984,7 @@ async def tg_send_doc_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(TGAction.waiting_target)
 async def tg_doc_target(message: types.Message, state: FSMContext):
     raw = message.text.strip()
-    if raw.replace('-', '').isdigit():
-        target = raw
-    else:
-        target = raw
+    target = raw if raw.replace('-', '').isdigit() else raw
     await state.update_data(target=target)
     await message.answer("Пришлите документ (файл):")
     await state.set_state(TGAction.waiting_file)
@@ -1064,10 +1044,7 @@ async def tg_schedule_start(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(TGAction.waiting_target)
 async def tg_schedule_target(message: types.Message, state: FSMContext):
     raw = message.text.strip()
-    if raw.replace('-', '').isdigit():
-        target = raw
-    else:
-        target = raw
+    target = raw if raw.replace('-', '').isdigit() else raw
     await state.update_data(target=target)
     await message.answer("Введите текст сообщения:")
     await state.set_state(TGAction.waiting_message)
@@ -1782,7 +1759,6 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
-        # Проверка спам-блока через @Spambot
         spam_status = "✅ Нет ограничений"
         try:
             spambot = await client.get_entity('@Spambot')
@@ -1881,7 +1857,9 @@ async def show_vk_account_info(message: types.Message, token: str):
         )
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")# ========== ИГРЫ ==========
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+
+# ========== ИГРЫ ==========
 @dp.callback_query(F.data == "game_menu")
 async def game_menu_callback(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -2199,7 +2177,18 @@ async def dec_bet(callback: types.CallbackQuery):
 async def all_in(callback: types.CallbackQuery):
     await callback.answer("Функция ва-банк будет добавлена позже", show_alert=True)
 
-# ========== АДМИН-ПАНЕЛЬ (промокоды и рассылка) ==========
+# ========== АДМИН-ПАНЕЛЬ ==========
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel_callback(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Только в ЛС", show_alert=True)
+        return
+    await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
+    await callback.answer()
+
 @dp.callback_query(F.data == "admin_promocodes")
 async def admin_promocodes_menu(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
@@ -2284,7 +2273,6 @@ async def delete_promo_exec(callback: types.CallbackQuery):
     await callback.answer("Промокод удалён", show_alert=True)
     await admin_promocodes_menu(callback)
 
-# ========== АКТИВАЦИЯ ПРОМОКОДА ПОЛЬЗОВАТЕЛЕМ ==========
 @dp.callback_query(F.data == "activate_promo")
 async def activate_promo_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите промокод:")
@@ -2308,7 +2296,7 @@ async def activate_promo_exec(message: types.Message, state: FSMContext):
         await bot.send_message(ADMIN_ID, f"🎫 Пользователь {user_id} активировал промокод {code}. Осталось использований: {remaining}")
     await state.clear()
 
-# ========== АДМИН-ПАНЕЛЬ (пагинация пользователей) ==========
+# ========== АДМИН: ПАГИНАЦИЯ ПОЛЬЗОВАТЕЛЕЙ ==========
 @dp.callback_query(F.data == "admin_users_page")
 async def admin_users_page(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
@@ -2320,7 +2308,7 @@ async def show_users_page(message: types.Message, state: FSMContext):
     page = data.get("page", 0)
     users = get_all_users()
     per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page
+    total_pages = (len(users) + per_page - 1) // per_page if users else 1
     if page >= total_pages:
         page = total_pages - 1
         await state.update_data(page=page)
@@ -2329,7 +2317,7 @@ async def show_users_page(message: types.Message, state: FSMContext):
         await state.update_data(page=page)
     start = page * per_page
     end = start + per_page
-    current_users = users[start:end]
+    current_users = users[start:end] if users else []
     text = "👥 *Пользователи:*\n\n"
     for u in current_users:
         sub = datetime.fromtimestamp(u["sub_until"]).strftime('%d.%m.%Y') if u["sub_until"] else "Нет"
@@ -2360,7 +2348,7 @@ async def users_page_next(callback: types.CallbackQuery, state: FSMContext):
     page = data.get("page", 0)
     users = get_all_users()
     per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page
+    total_pages = (len(users) + per_page - 1) // per_page if users else 1
     if page < total_pages - 1:
         await state.update_data(page=page + 1)
         await show_users_page(callback.message, state)
@@ -2517,19 +2505,19 @@ async def withdraw_reject(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await callback.message.answer("📢 Что будет в рассылке?\nПришлите текст + (опционально) фото.")
-    await state.set_state(AdminBroadcast.waiting_type)
+    await callback.message.answer("📢 Пришлите текст рассылки (и опционально фото в следующем шаге):")
+    await state.set_state(AdminBroadcast.waiting_text)
     await callback.answer()
 
-@dp.message(AdminBroadcast.waiting_type, F.text)
+@dp.message(AdminBroadcast.waiting_text, F.text)
 async def admin_broadcast_text(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     text = message.text
     await state.update_data(text=text)
-    await message.answer("Пришлите фото (или /skip для отправки только текста):")
+    await message.answer("Теперь пришлите фото (или /skip для отправки только текста):")
     await state.set_state(AdminBroadcast.waiting_photo)
 
-@dp.message(AdminBroadcast.waiting_type, F.photo)
+@dp.message(AdminBroadcast.waiting_photo, F.photo)
 async def admin_broadcast_photo(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     photo = message.photo[-1].file_id
@@ -2572,9 +2560,10 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Рассылка завершена. Отправлено {sent} из {total}")
     await state.clear()
 
-# ========== ЗАПУСК БОТА ==========
+# ========== ЗАПУСК ==========
 async def main():
     init_db()
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
     print("Бот запущен")
     await dp.start_polling(bot)
 
