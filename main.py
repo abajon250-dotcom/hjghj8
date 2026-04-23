@@ -299,7 +299,6 @@ def darts_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Яблочко (x10)", callback_data="darts_bullseye")],
         [InlineKeyboardButton(text="20 (x5)", callback_data="darts_20")],
-        [InlineKeyboardButton(text="Любое число (x2)", callback_data="darts_any")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
     ])
 
@@ -444,6 +443,7 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
         if not client.is_connected():
             await client.connect()
         me = await client.get_me()
+        # Страна
         country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
         country = "Неизвестно"
         if phone and phone.startswith('+'):
@@ -451,22 +451,48 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
+        # Спам-блок через @Spambot
+        spam_status = "✅ Нет ограничений"
+        try:
+            spambot = await client.get_entity('@Spambot')
+            await client.send_message(spambot, '/start')
+            await asyncio.sleep(3)
+            async for msg in client.iter_messages(spambot, limit=1):
+                if 'no restrictions' in (msg.text or '').lower():
+                    spam_status = "✅ Нет ограничений"
+                elif 'limited' in (msg.text or '').lower():
+                    spam_status = "⚠️ Есть ограничения"
+                else:
+                    spam_status = "🤷 Не удалось определить"
+        except:
+            spam_status = "❌ Ошибка проверки"
+        # Диалоги и контакты
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
+        # Точный подсчёт взаимных контактов (у кого есть диалог в обе стороны – фактически все пользователи, с которыми есть переписка)
         mutual = 0
-        for user in users[:50]:
+        for user in users[:100]:  # ограничим для скорости
             try:
                 async for _ in client.iter_messages(user.entity, limit=1):
                     mutual += 1
                     break
             except:
                 pass
-        info = (f"📱 *Telegram аккаунт*\n📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n🆔 ID: `{me.id}`\n👤 Имя: {me.first_name} {me.last_name or ''}\n🌍 Страна: {country}\n👥 Контактов: {total_contacts}\n💬 Диалогов: {total_dialogs}\n🤝 Взаимных (приблиз.): {mutual}\n✅ Аккаунт подключён!")
+        info = (f"📱 *Telegram аккаунт*\n"
+                f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n"
+                f"🆔 ID: `{me.id}`\n"
+                f"👤 Имя: {me.first_name} {me.last_name or ''}\n"
+                f"🌍 Страна: {country}\n"
+                f"🔒 Спам-блок: {spam_status}\n"
+                f"👥 Контактов (всего): {total_contacts}\n"
+                f"💬 Диалогов (всего): {total_dialogs}\n"
+                f"🤝 Взаимных контактов (приблизительно): {mutual}\n"
+                f"✅ Аккаунт подключён!")
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
-        await message.answer(f"❌ Ошибка получения информации: {e}")
+        await message.answer(f"❌ Не удалось получить информацию: {e}")
 
 async def show_vk_account_info(message: types.Message, token: str):
     try:
@@ -709,8 +735,19 @@ async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
+        # Проверяем, активна ли сессия
+        me = await client.get_me()
+        if me:
+            await callback.message.answer(f"✅ Сессия активна. Аккаунт {me.first_name} уже авторизован.")
+        else:
+            await client.send_code_request(phone)
+            await callback.message.answer(f"✅ Код подтверждения отправлен на номер {phone}. Введите его в следующем сообщении.")
+            await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
+            await state.set_state(ManageTG.waiting_code_for_login)
+    except (AuthKeyError, UnauthorizedError):
+        await handle_session_error(callback.from_user.id, acc_id, phone)
+        await callback.message.answer("❌ Сессия недействительна. Отправляю новый код...")
         await client.send_code_request(phone)
-        await callback.message.answer(f"✅ Код подтверждения отправлен на номер {phone}.")
         await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
         await state.set_state(ManageTG.waiting_code_for_login)
     except Exception as e:
@@ -1941,9 +1978,9 @@ async def game_darts_choice_after_bet(message: types.Message, state: FSMContext)
     await asyncio.sleep(1)
     outcomes = {
         "darts_bullseye": {"win": value == 6, "mult": 10, "name": "Яблочко"},
-        "darts_20": {"win": value == 5, "mult": 5, "name": "20"},
-        "darts_any": {"win": True, "mult": 2, "name": "Любое число"}
+        "darts_20": {"win": value == 5, "mult": 5, "name": "20"}
     }
+    # Удалён вариант darts_any
     outcome = outcomes.get(mode)
     if not outcome:
         await message.answer("❌ Ошибка выбора")
