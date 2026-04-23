@@ -74,6 +74,8 @@ def create_user(tg_id, username):
     conn.close()
 
 def is_platinum_subscribed(tg_id):
+    if tg_id == ADMIN_ID:
+        return True
     user = get_user(tg_id)
     return user and user["sub_until"] > int(time.time())
 
@@ -535,6 +537,7 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
         await client.disconnect()
         await state.clear()
 
+
 async def show_tg_account_info(message: types.Message, client: TelegramClient, phone: str):
     try:
         if not client.is_connected():
@@ -543,14 +546,18 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
         if me is None:
             await message.answer("❌ Не удалось получить информацию об аккаунте.")
             return
+
         # Страна по коду телефона
-        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
+        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США",
+                       "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай",
+                       "91": "🇮🇳 Индия"}
         country = "Неизвестно"
         if phone and phone.startswith('+'):
             for code in country_map:
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
+
         # Проверка спам-блока через @Spambot
         spam_status = "✅ Нет ограничений"
         try:
@@ -564,34 +571,39 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
                     elif 'limited' in msg.text.lower() or 'restricted' in msg.text.lower():
                         spam_status = "⚠️ Есть ограничения (спам-блок активен)"
         except:
-            pass
-        # Контакты и диалоги
+            spam_status = "❓ Не удалось проверить"
+
+        # Получаем диалоги и контакты
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
-        # Взаимные контакты (через get_contacts)
+
+        # Взаимные контакты (приблизительно: пользователи, с которыми есть диалог и мы им писали/они писали нам)
         mutual = 0
-        try:
-            contacts = await client.get_contacts()
-            mutual = len(contacts)
-        except:
-            mutual = total_contacts
+        for user in users[:100]:  # ограничим для скорости
+            try:
+                async for _ in client.iter_messages(user.entity, limit=1):
+                    mutual += 1
+                    break
+            except:
+                pass
+
         info = (
             f"📱 *Telegram аккаунт*\n"
-            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n"
+            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone) > 7 else ''}`\n"
             f"🆔 ID: `{me.id}`\n"
             f"👤 Имя: {me.first_name or ''} {me.last_name or ''}\n"
             f"🌍 Страна: {country}\n"
             f"🔒 Спам-блок: {spam_status}\n"
             f"👥 Контактов (всего): {total_contacts}\n"
-            f"💬 Диалогов (всего): {total_dialogs}\n"
-            f"🤝 Взаимных контактов: {mutual}\n"
+            f"💬 чатов (всего): {total_dialogs}\n"
+            f"🤝 Взаимных контактов : {mutual}\n"
             f"✅ Аккаунт подключён!"
         )
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
-        await message.answer(f"❌ Ошибка получения информации: {get_russian_error(str(e))}")
+        await message.answer(f"❌ Ошибка получения информации: {get_russian_error(e)}")
 
 # ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
@@ -3751,10 +3763,12 @@ async def check_all_tg_accounts():
 # ========== ЗАПУСК ==========
 async def main():
     init_db()
-    await bot.delete_webhook(drop_pending_updates=True)
-    asyncio.create_task(check_all_tg_accounts())
-    print("✅ Бот запущен")
-    await dp.start_polling(bot)
-
+    # Устанавливаем админу подписку до 2030 года
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET sub_until = ? WHERE tg_id = ?", (int(time.time()) + 365 * 86400 * 10, ADMIN_ID))
+    conn.commit()
+    conn.close()
+    
 if __name__ == "__main__":
     asyncio.run(main())
