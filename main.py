@@ -2327,7 +2327,7 @@ async def show_users_page(message: types.Message, state: FSMContext):
         kb.append(InlineKeyboardButton("◀️ Назад", callback_data="users_page_prev"))
     if page < total_pages - 1:
         kb.append(InlineKeyboardButton("Вперед ▶️", callback_data="users_page_next"))
-    kb.append(InlineKeyboardButton("🔙 В админку", callback_data="admin_panel"))
+    kb.append(InlineKeyboardButton(text="🔙 В админку", callback_data="admin_panel"))
     keyboard = InlineKeyboardMarkup(inline_keyboard=[kb])
     await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
@@ -2355,13 +2355,13 @@ async def users_page_next(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_users")
-async def admin_users_list(callback: types.CallbackQuery):
+async def admin_users_list(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
     users = get_all_users()
     if not users:
         await callback.message.edit_text("Пользователей нет", reply_markup=back_button("admin_panel"))
         return
-    await admin_users_page(callback)
+    await admin_users_page(callback, state)
 
 # ========== ВЫДАЧА И СПИСАНИЕ БАЛАНСА ==========
 @dp.callback_query(F.data == "admin_add_balance")
