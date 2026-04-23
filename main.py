@@ -443,56 +443,66 @@ async def show_tg_account_info(message: types.Message, client: TelegramClient, p
         if not client.is_connected():
             await client.connect()
         me = await client.get_me()
-        # Страна
-        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
+        if not me:
+            await message.answer("❌ Не удалось получить данные аккаунта.")
+            return
+
+        # Страна по коду телефона
+        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США",
+                       "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай",
+                       "91": "🇮🇳 Индия"}
         country = "Неизвестно"
         if phone and phone.startswith('+'):
             for code in country_map:
                 if phone.startswith('+' + code):
                     country = country_map[code]
                     break
-        # Спам-блок через @Spambot
+
+        # Проверка спам-блока через @Spambot
         spam_status = "✅ Нет ограничений"
         try:
             spambot = await client.get_entity('@Spambot')
             await client.send_message(spambot, '/start')
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             async for msg in client.iter_messages(spambot, limit=1):
                 if 'no restrictions' in (msg.text or '').lower():
-                    spam_status = "✅ Нет ограничений"
-                elif 'limited' in (msg.text or '').lower():
-                    spam_status = "⚠️ Есть ограничения"
+                    spam_status = "✅ Нет ограничений (спам-блок отсутствует)"
+                elif 'limited' in (msg.text or '').lower() or 'restricted' in (msg.text or '').lower():
+                    spam_status = "⚠️ Есть ограничения (спам-блок активен)"
                 else:
-                    spam_status = "🤷 Не удалось определить"
+                    spam_status = "🤷 Не удалось определить статус"
         except:
-            spam_status = "❌ Ошибка проверки"
+            spam_status = "⚠️ Не удалось проверить"
+
         # Диалоги и контакты
         dialogs = await client.get_dialogs()
         users = [d for d in dialogs if d.is_user]
         total_contacts = len(users)
         total_dialogs = len(dialogs)
-        # Точный подсчёт взаимных контактов (у кого есть диалог в обе стороны – фактически все пользователи, с которыми есть переписка)
+
+        # Точное количество взаимных контактов (те, у кого есть диалог с нами)
         mutual = 0
-        for user in users[:100]:  # ограничим для скорости
+        for user in users:
             try:
                 async for _ in client.iter_messages(user.entity, limit=1):
                     mutual += 1
                     break
             except:
                 pass
+
         info = (f"📱 *Telegram аккаунт*\n"
-                f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n"
+                f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone) > 7 else ''}`\n"
                 f"🆔 ID: `{me.id}`\n"
                 f"👤 Имя: {me.first_name} {me.last_name or ''}\n"
                 f"🌍 Страна: {country}\n"
                 f"🔒 Спам-блок: {spam_status}\n"
                 f"👥 Контактов (всего): {total_contacts}\n"
                 f"💬 Диалогов (всего): {total_dialogs}\n"
-                f"🤝 Взаимных контактов (приблизительно): {mutual}\n"
+                f"🤝 Взаимных контактов: {mutual}\n"
                 f"✅ Аккаунт подключён!")
         await message.answer(info, parse_mode="Markdown")
     except Exception as e:
-        await message.answer(f"❌ Не удалось получить информацию: {e}")
+        await message.answer(f"❌ Ошибка получения информации: {e}")
 
 async def show_vk_account_info(message: types.Message, token: str):
     try:
@@ -688,7 +698,7 @@ async def tg_cloud_password_start(callback: types.CallbackQuery, state: FSMConte
 async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     password = message.text.strip()
     if len(password) < 1:
-        await message.answer("❌ Пароль не может быть пустым. Введите хотя бы 1 символ.")
+        await message.answer("❌ Пароль не может быть пустым. Попробуйте снова.")
         return
     data = await state.get_data()
     acc_id = data["acc_id"]
@@ -705,18 +715,25 @@ async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
-        # Проверяем авторизацию
-        await client.get_me()
-        # Устанавливаем 2FA
-        await client.edit_2fa(new_password=password)
+        # Проверяем, что клиент авторизован
+        me = await client.get_me()
+        if not me:
+            await handle_session_error(message.from_user.id, acc_id, phone)
+            await message.answer("❌ Сессия недействительна. Аккаунт удалён.")
+            return
+        # Установка 2FA (правильный метод)
+        await client.edit_2fa(password=password)
         await message.answer("✅ Облачный пароль (2FA) успешно установлен!")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
+        await message.answer("❌ Сессия слетела. Аккаунт удалён.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}")
+        await message.answer(f"❌ Ошибка: {e}")
     finally:
         await client.disconnect()
         await state.clear()
+
+
 @dp.callback_query(F.data.startswith("tg_request_code_"))
 async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -725,7 +742,8 @@ async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[3])
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, callback.from_user.id))
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
+              (acc_id, callback.from_user.id))
     row = c.fetchone()
     conn.close()
     if not row:
@@ -735,19 +753,21 @@ async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
-        # Проверяем, активна ли сессия
+        # Проверяем, авторизован ли клиент
         me = await client.get_me()
         if me:
-            await callback.message.answer(f"✅ Сессия активна. Аккаунт {me.first_name} уже авторизован.")
-        else:
-            await client.send_code_request(phone)
-            await callback.message.answer(f"✅ Код подтверждения отправлен на номер {phone}. Введите его в следующем сообщении.")
-            await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
-            await state.set_state(ManageTG.waiting_code_for_login)
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(callback.from_user.id, acc_id, phone)
-        await callback.message.answer("❌ Сессия недействительна. Отправляю новый код...")
+            # Если уже авторизован – не нужно запрашивать код
+            await callback.message.answer("✅ Аккаунт уже активен. Код не требуется.")
+            await client.disconnect()
+            return
+    except:
+        # Если не авторизован – продолжаем
+        pass
+
+    try:
         await client.send_code_request(phone)
+        await callback.message.answer(
+            f"✅ Код подтверждения отправлен на номер {phone}. Введите его через /verifycode <код>")
         await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
         await state.set_state(ManageTG.waiting_code_for_login)
     except Exception as e:
@@ -768,6 +788,14 @@ async def tg_verify_code(message: types.Message, state: FSMContext):
     try:
         await client.sign_in(phone, code)
         await message.answer("✅ Код подтверждён. Аккаунт активен.")
+        # Обновляем имя в БД
+        me = await client.get_me()
+        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE tg_accounts SET name=?, last_used=? WHERE id=?", (name, int(time.time()), acc_id))
+        conn.commit()
+        conn.close()
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
     finally:
@@ -1153,16 +1181,26 @@ async def tg_refresh_info(callback: types.CallbackQuery):
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
+        # Проверяем, авторизован ли клиент
         me = await client.get_me()
+        if not me:
+            # Если не удалось получить себя – сессия слетела
+            await handle_session_error(callback.from_user.id, acc_id, phone)
+            await callback.answer("❌ Сессия недействительна. Аккаунт удалён.", show_alert=True)
+            await callback.message.edit_text("Главное меню", reply_markup=main_menu(callback.from_user.id))
+            return
+        # Обновляем имя в БД
         name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("UPDATE tg_accounts SET name=? WHERE id=?", (name, acc_id))
+        c.execute("UPDATE tg_accounts SET name=?, last_used=? WHERE id=?", (name, int(time.time()), acc_id))
         conn.commit()
         conn.close()
-        await callback.message.answer(f"✅ Информация обновлена: {name}")
+        # Показываем информацию
+        await show_tg_account_info(callback.message, client, phone)
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(callback.from_user.id, acc_id, phone)
+        await callback.answer("❌ Сессия слетела. Аккаунт удалён.", show_alert=True)
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
     finally:
