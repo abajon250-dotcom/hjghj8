@@ -32,13 +32,11 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")   # канал для проверки подписки (без @)
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 
-# Проверка обязательных переменных
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set")
 
-# Пути для сессий Telethon (сохраняются в Railway Filesystem, но не постоянны – лучше потом перенести в облако)
 SESSIONS_DIR = "/app/sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
@@ -48,14 +46,12 @@ TARIFFS = {
     "month": {"days": 30, "price": 15, "name": "1 месяц"}
 }
 
-# ========== ПУЛ ДЛЯ РАБОТЫ С БАЗОЙ ДАННЫХ ==========
 db_pool = None
 
 async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), command_timeout=60)
     async with db_pool.acquire() as conn:
-        # Таблица пользователей
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 tg_id BIGINT PRIMARY KEY,
@@ -64,7 +60,6 @@ async def init_db():
                 balance REAL DEFAULT 0
             )
         ''')
-        # Таблица Telegram аккаунтов (привязанных к пользователю)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tg_accounts (
                 id SERIAL PRIMARY KEY,
@@ -76,7 +71,6 @@ async def init_db():
                 last_used BIGINT DEFAULT 0
             )
         ''')
-        # Таблица VK аккаунтов
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS vk_accounts (
                 id SERIAL PRIMARY KEY,
@@ -86,7 +80,6 @@ async def init_db():
                 is_active BOOLEAN DEFAULT TRUE
             )
         ''')
-        # Заявки на вывод
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id SERIAL PRIMARY KEY,
@@ -96,7 +89,6 @@ async def init_db():
                 status TEXT DEFAULT 'pending'
             )
         ''')
-        # Промокоды
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS promocodes (
                 id SERIAL PRIMARY KEY,
@@ -106,7 +98,6 @@ async def init_db():
                 max_uses INTEGER DEFAULT 1
             )
         ''')
-        # Использованные промокоды (для проверки, что пользователь активировал конкретный промокод)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS used_promocodes (
                 user_id BIGINT NOT NULL,
@@ -115,9 +106,8 @@ async def init_db():
                 PRIMARY KEY (user_id, code_id)
             )
         ''')
-    print("✅ База данных PostgreSQL готова")
+    print("✅ PostgreSQL ready")
 
-# ========== ФУНКЦИИ РАБОТЫ С БАЗОЙ (АСИНХРОННЫЕ) ==========
 async def get_user(tg_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT tg_id, username, sub_until, balance FROM users WHERE tg_id=$1", tg_id)
@@ -148,11 +138,6 @@ async def update_balance(tg_id: int, delta: float):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET balance = balance + $1 WHERE tg_id=$2", delta, tg_id)
 
-async def set_balance(tg_id: int, new_balance: float):
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET balance = $1 WHERE tg_id=$2", new_balance, tg_id)
-
-# Telegram аккаунты
 async def add_tg_account(owner_tg_id: int, phone: str, session_file: str, name: str):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO tg_accounts (owner_tg_id, phone, session_file, name, last_used) VALUES ($1,$2,$3,$4,$5)",
@@ -163,11 +148,6 @@ async def get_user_tg_accounts(owner_tg_id: int):
         rows = await conn.fetch("SELECT id, phone, name, is_active FROM tg_accounts WHERE owner_tg_id=$1 ORDER BY last_used DESC", owner_tg_id)
         return [{"id": r["id"], "phone": r["phone"], "name": r["name"], "is_active": r["is_active"]} for r in rows]
 
-async def get_active_tg_account(owner_tg_id: int):
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone, name FROM tg_accounts WHERE owner_tg_id=$1 AND is_active=TRUE ORDER BY last_used DESC LIMIT 1", owner_tg_id)
-        return {"session_file": row["session_file"], "phone": row["phone"], "name": row["name"]} if row else None
-
 async def set_active_tg_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE owner_tg_id=$1", owner_tg_id)
@@ -177,11 +157,6 @@ async def delete_tg_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
 
-async def deactivate_tg_account(owner_tg_id: int, account_id: int):
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-
-# VK аккаунты
 async def add_vk_account(owner_tg_id: int, token: str, vk_name: str):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO vk_accounts (owner_tg_id, token, vk_name, is_active) VALUES ($1,$2,$3,TRUE)", owner_tg_id, token, vk_name)
@@ -190,11 +165,6 @@ async def get_user_vk_accounts(owner_tg_id: int):
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT id, vk_name, is_active FROM vk_accounts WHERE owner_tg_id=$1", owner_tg_id)
         return [{"id": r["id"], "name": r["vk_name"], "is_active": r["is_active"]} for r in rows]
-
-async def get_active_vk_account(owner_tg_id: int):
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT token, vk_name FROM vk_accounts WHERE owner_tg_id=$1 AND is_active=TRUE LIMIT 1", owner_tg_id)
-        return {"token": row["token"], "name": row["vk_name"]} if row else None
 
 async def set_active_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
@@ -205,13 +175,11 @@ async def delete_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
 
-# Пользователи (для админки)
 async def get_all_users():
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT tg_id, username, sub_until, balance FROM users ORDER BY tg_id")
         return [{"tg_id": r["tg_id"], "username": r["username"], "sub_until": r["sub_until"] or 0, "balance": r["balance"]} for r in rows]
 
-# Заявки на вывод
 async def add_withdraw_request(user_id: int, amount: float, wallet: str):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO withdraw_requests (user_id, amount, wallet) VALUES ($1,$2,$3)", user_id, amount, wallet)
@@ -225,7 +193,6 @@ async def update_withdraw_status(req_id: int, status: str):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE withdraw_requests SET status=$1 WHERE id=$2", status, req_id)
 
-# Промокоды
 async def create_promocode(code: str, days: int, max_uses: int = 1):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO promocodes (code, days, max_uses) VALUES ($1,$2,$3)", code, days, max_uses)
@@ -251,63 +218,50 @@ async def delete_promocode(code_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM promocodes WHERE id=$1", code_id)
 
-# ========== CRYPTOBOT ==========
 CRYPTOBOT_API_URL = "https://pay.crypt.bot/api"
 
 async def create_crypto_invoice(amount_usd: float, description: str):
     if not CRYPTOBOT_TOKEN:
         return None
-    url = f"{CRYPTOBOT_API_URL}/createInvoice"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
-    payload = {"asset": "USDT", "amount": str(amount_usd), "description": description, "paid_btn_name": "callback", "paid_btn_url": f"https://t.me/{BOT_TOKEN.split(':')[0]}"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(CRYPTOBOT_API_URL + "/createInvoice", headers={"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN},
+                                    json={"asset": "USDT", "amount": str(amount_usd), "description": description}) as resp:
                 data = await resp.json()
                 if data.get("ok"):
                     return {"pay_url": data["result"]["pay_url"], "invoice_id": data["result"]["invoice_id"]}
-    except:
-        pass
+        except:
+            pass
     return None
 
 async def check_crypto_invoice(invoice_id: str):
     if not CRYPTOBOT_TOKEN:
         return None
-    url = f"{CRYPTOBOT_API_URL}/getInvoices"
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
-    params = {"invoice_ids": invoice_id}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params) as resp:
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(CRYPTOBOT_API_URL + "/getInvoices", headers={"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN},
+                                   params={"invoice_ids": invoice_id}) as resp:
                 data = await resp.json()
                 if data.get("ok") and data["result"]["items"]:
                     return data["result"]["items"][0]["status"]
-    except:
-        pass
+        except:
+            pass
     return None
 
-# ========== ОБРАБОТКА ОШИБОК ==========
 async def handle_session_error(user_id: int, account_id: int, phone: str):
-    await deactivate_tg_account(user_id, account_id)
-    await bot.send_message(user_id, f"❌ Аккаунт {phone} был автоматически удалён из-за слетевшей сессии.")
+    await delete_tg_account(user_id, account_id)
+    await bot.send_message(user_id, f"❌ Аккаунт {phone} удалён из‑за слетевшей сессии.")
 
 def get_russian_error(e: Exception) -> str:
     error = str(e)
     if "Cannot find any entity" in error:
-        return "Не удалось найти пользователя или чат. Проверьте ID или username."
-    if "Too many requests" in error:
-        return "Слишком много запросов. Подождите немного."
-    if "FloodWaitError" in error:
-        return "Превышен лимит запросов. Попробуйте позже."
+        return "Не удалось найти пользователя или чат."
+    if "Too many requests" in error or "FloodWaitError" in error:
+        return "Слишком много запросов. Подождите."
     if "AuthKeyError" in error or "UnauthorizedError" in error:
         return "Сессия устарела. Аккаунт будет удалён."
-    if "disconnected" in error:
-        return "Соединение разорвано. Попробуйте ещё раз."
-    if "The message cannot be empty" in error:
-        return "Сообщение не может быть пустым. Добавьте текст или файл."
     return error
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ (без мидлвари) ==========
 async def is_subscribed_to_channel(user_id: int) -> bool:
     if not CHANNEL_USERNAME:
         return True
@@ -342,7 +296,7 @@ def cube_menu():
         [InlineKeyboardButton(text="Больше/Меньше (x2)", callback_data="cube_less_more")],
         [InlineKeyboardButton(text="Чёт/Нечет (x2)", callback_data="cube_even_odd")],
         [InlineKeyboardButton(text="Угадать число (x6)", callback_data="cube_exact")],
-        [InlineKeyboardButton(text="Диапазон (x3)", callback_data="cube_range")],
+        [InlineKeyboardButton(text="Диапазон (x?)", callback_data="cube_range")],
         [InlineKeyboardButton(text="Больше 3.5 / Меньше 3.5 (x2)", callback_data="cube_35")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
     ])
@@ -409,10 +363,8 @@ async def vk_accounts_list(user_id: int):
 
 def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"),
-         InlineKeyboardButton(text="👥 Пользователи >", callback_data="admin_users_page")],
-        [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"),
-         InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"), InlineKeyboardButton(text="👥 Пользователи >", callback_data="admin_users_page")],
+        [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"), InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
         [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
         [InlineKeyboardButton(text="📢 Глобал рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="🎫 Промокоды", callback_data="admin_promocodes")],
@@ -434,89 +386,26 @@ def back_button(callback_data: str):
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=callback_data)]])
 
 # ========== FSM СОСТОЯНИЯ ==========
-class AddTG(StatesGroup):
-    waiting_phone = State()
-    waiting_code = State()
-    waiting_2fa = State()
+class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
+class AddVK(StatesGroup): waiting_token = State()
+class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State()
+class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
+class AdminAddBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
+class AdminRemoveBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
+class AdminGiveSubscription(StatesGroup): waiting_user_id = State(); waiting_days = State()
+class Withdraw(StatesGroup): waiting_amount = State(); waiting_wallet = State()
+class Deposit(StatesGroup): waiting_amount = State()
+class GameBet(StatesGroup): waiting_bet = State()
+class GameCube(StatesGroup): waiting_choice = State(); waiting_exact = State(); waiting_range = State()
+class GameBasketball(StatesGroup): waiting_choice = State()
+class GameDarts(StatesGroup): waiting_choice = State()
+class GameFootball(StatesGroup): waiting_choice = State()
+class ManageTG(StatesGroup): waiting_new_avatar = State(); waiting_cloud_password = State(); waiting_code_for_login = State(); waiting_new_name = State(); waiting_new_username = State()
+class TGAction(StatesGroup): waiting_target = State(); waiting_message = State(); waiting_join_link = State(); waiting_photo = State(); waiting_file = State(); waiting_schedule_delay = State()
+class AdminCreatePromocode(StatesGroup): waiting_code = State(); waiting_days = State(); waiting_max_uses = State()
+class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State(); waiting_confirm = State()
+class ActivatePromo(StatesGroup): waiting_code = State()
 
-class AddVK(StatesGroup):
-    waiting_token = State()
-
-class BroadcastTG(StatesGroup):
-    waiting_text = State()
-    waiting_delay = State()
-
-class BroadcastVK(StatesGroup):
-    waiting_text = State()
-    waiting_delay = State()
-
-class AdminAddBalance(StatesGroup):
-    waiting_user_id = State()
-    waiting_amount = State()
-
-class AdminRemoveBalance(StatesGroup):
-    waiting_user_id = State()
-    waiting_amount = State()
-
-class AdminGiveSubscription(StatesGroup):
-    waiting_user_id = State()
-    waiting_days = State()
-
-class Withdraw(StatesGroup):
-    waiting_amount = State()
-    waiting_wallet = State()
-
-class Deposit(StatesGroup):
-    waiting_amount = State()
-
-class GameBet(StatesGroup):
-    waiting_bet = State()
-
-class GameCube(StatesGroup):
-    waiting_choice = State()
-    waiting_exact = State()
-    waiting_range = State()
-
-class GameBasketball(StatesGroup):
-    waiting_choice = State()
-
-class GameDarts(StatesGroup):
-    waiting_choice = State()
-
-class GameFootball(StatesGroup):
-    waiting_choice = State()
-
-class ManageTG(StatesGroup):
-    waiting_new_avatar = State()
-    waiting_cloud_password = State()
-    waiting_code_for_login = State()
-    waiting_new_name = State()
-    waiting_new_username = State()
-
-class TGAction(StatesGroup):
-    waiting_target = State()
-    waiting_message = State()
-    waiting_join_link = State()
-    waiting_photo = State()
-    waiting_file = State()
-    waiting_schedule_delay = State()
-
-class AdminCreatePromocode(StatesGroup):
-    waiting_code = State()
-    waiting_days = State()
-    waiting_max_uses = State()
-
-class AdminBroadcast(StatesGroup):
-    waiting_text = State()
-    waiting_photo = State()
-    waiting_confirm = State()
-
-class ActivatePromo(StatesGroup):
-    waiting_code = State()
-
-user_game_data = {}
-
-# ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
@@ -525,13 +414,13 @@ async def start_cmd(message: types.Message):
         return
     await create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
     if not await is_subscribed_to_channel(message.from_user.id):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
             [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub_start")]
         ])
-        await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}, чтобы пользоваться ботом.", reply_markup=keyboard)
+        await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
         return
-    await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
+    await message.answer("🎲 Добро пожаловать!", reply_markup=main_menu(message.from_user.id))
 
 @dp.callback_query(F.data == "check_sub_start")
 async def check_sub_start(callback: types.CallbackQuery):
@@ -539,7 +428,7 @@ async def check_sub_start(callback: types.CallbackQuery):
         await callback.message.delete()
         await start_cmd(callback.message)
     else:
-        await callback.answer("❌ Вы не подписаны. Нажмите кнопку 'Подписаться' и затем 'Проверить подписку'.", show_alert=True)
+        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
@@ -551,57 +440,39 @@ async def main_menu_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "profile")
 async def profile(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     user = await get_user(callback.from_user.id)
     balance = user["balance"]
     sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y %H:%M') if user["sub_until"] else "Нет"
     text = f"👤 Профиль\n💰 Баланс: {balance:.2f}$\n⏳ Подписка до: {sub_until}"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"),
-         InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
-        [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub"),
-         InlineKeyboardButton(text="🎫 Активировать промокод", callback_data="activate_promo")],
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"), InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
+        [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub"), InlineKeyboardButton(text="🎫 Активировать промокод", callback_data="activate_promo")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
     ])
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "my_accounts")
 async def my_accounts(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "connect_new_account")
 async def connect_new(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    await callback.message.edit_text("Выберите тип аккаунта:", reply_markup=connect_new_menu())
+    await callback.message.edit_text("Выберите тип:", reply_markup=connect_new_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "list_tg_accounts")
 async def list_tg_accounts(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     accounts = await get_user_tg_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text("У вас нет Telegram аккаунтов. Подключите новый.", reply_markup=back_button("my_accounts"))
-        await callback.answer()
+        await callback.message.edit_text("Нет Telegram аккаунтов.", reply_markup=back_button("my_accounts"))
         return
-    await callback.message.edit_text("Выберите аккаунт:", reply_markup=await tg_accounts_list(callback.from_user.id))
+    await callback.message.edit_text("Ваши аккаунты:", reply_markup=await tg_accounts_list(callback.from_user.id))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_acc_"))
 async def tg_account_actions(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     accounts = await get_user_tg_accounts(callback.from_user.id)
     acc = next((a for a in accounts if a["id"] == acc_id), None)
@@ -626,38 +497,29 @@ async def tg_account_actions(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"tg_del_{acc_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="list_tg_accounts")]
     ])
-    await callback.message.edit_text(f"Аккаунт: {acc['name']} ({acc['phone']})\nВыберите действие:", reply_markup=keyboard)
+    await callback.message.edit_text(f"Аккаунт: {acc['name']} ({acc['phone']})", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_set_active_"))
 async def tg_set_active(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await set_active_tg_account(callback.from_user.id, acc_id)
-    await callback.answer("Аккаунт установлен как активный!", show_alert=True)
+    await callback.answer("✅ Активен", show_alert=True)
     await list_tg_accounts(callback)
 
 @dp.callback_query(F.data.startswith("tg_del_"))
 async def tg_delete(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await delete_tg_account(callback.from_user.id, acc_id)
-    await callback.answer("Аккаунт удалён", show_alert=True)
+    await callback.answer("Удалён", show_alert=True)
     await list_tg_accounts(callback)
 
-# ========== УПРАВЛЕНИЕ АККАУНТОМ (аватар, пароль, имя, username) ==========
+# ========== УПРАВЛЕНИЕ АККАУНТОМ ==========
 @dp.callback_query(F.data.startswith("tg_change_avatar_"))
 async def tg_change_avatar_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Пришлите новое фото для аватарки:")
+    await callback.message.answer("Пришлите новое фото:")
     await state.set_state(ManageTG.waiting_new_avatar)
     await callback.answer()
 
@@ -681,38 +543,35 @@ async def tg_change_avatar_photo(message: types.Message, state: FSMContext):
         file_path = f"/tmp/{photo.file_id}.jpg"
         await message.bot.download_file(file.file_path, file_path)
         await client(UploadProfilePhotoRequest(file=await client.upload_file(file_path)))
-        await message.answer("✅ Аватарка успешно изменена!")
+        await message.answer("✅ Аватарка изменена!")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_cloud_password_"))
 async def tg_cloud_password_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("🔐 Введите новый облачный пароль (минимум 1 символ):")
+    await callback.message.answer("🔐 Введите облачный пароль:")
     await state.set_state(ManageTG.waiting_cloud_password)
     await callback.answer()
 
 @dp.message(ManageTG.waiting_cloud_password)
 async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     password = message.text.strip()
-    if len(password) < 1:
-        await message.answer("❌ Пароль не может быть пустым.")
+    if not password:
+        await message.answer("Пароль не может быть пустым")
         return
     data = await state.get_data()
     acc_id = data["acc_id"]
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ Аккаунт не найден")
+            await message.answer("Аккаунт не найден")
             await state.clear()
             return
         session_file, phone = row["session_file"], row["phone"]
@@ -721,20 +580,17 @@ async def tg_cloud_password_set(message: types.Message, state: FSMContext):
     try:
         await client.get_me()
         await client.edit_2fa(new_password=password)
-        await message.answer("✅ Облачный пароль (2FA) успешно установлен!")
+        await message.answer("✅ 2FA пароль установлен!")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_request_code_"))
 async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
@@ -747,18 +603,18 @@ async def tg_request_code(callback: types.CallbackQuery, state: FSMContext):
     try:
         me = await client.get_me()
         if me:
-            await callback.message.answer("✅ Аккаунт уже активен. Код не требуется.")
+            await callback.message.answer("✅ Аккаунт уже активен")
             return
     except (AuthKeyError, UnauthorizedError):
         try:
             await client.send_code_request(phone)
-            await callback.message.answer(f"📲 Код подтверждения отправлен на номер {phone}. Введите его в ответном сообщении.")
+            await callback.message.answer(f"📲 Код отправлен на {phone}. Введите его:")
             await state.update_data(acc_id=acc_id, phone=phone, session_file=session_file)
             await state.set_state(ManageTG.waiting_code_for_login)
         except Exception as e:
-            await callback.message.answer(f"❌ Ошибка при запросе кода: {get_russian_error(e)}")
+            await callback.message.answer(f"❌ {get_russian_error(e)}")
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await callback.message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
     await callback.answer()
@@ -776,16 +632,13 @@ async def tg_verify_code(message: types.Message, state: FSMContext):
         await client.sign_in(phone, code)
         await message.answer("✅ Код подтверждён. Аккаунт активен.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_change_name_"))
 async def tg_change_name_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
     await callback.message.answer("Введите новое имя (first name):")
@@ -809,25 +662,21 @@ async def tg_change_name(message: types.Message, state: FSMContext):
     try:
         await client.get_me()
         await client(UpdateProfileRequest(first_name=new_name))
-        await message.answer(f"✅ Имя успешно изменено на {new_name}")
-        async with db_pool.acquire() as conn:
-            await conn.execute("UPDATE tg_accounts SET name=$1 WHERE id=$2", new_name, acc_id)
+        await message.answer(f"✅ Имя изменено на {new_name}")
+        await conn.execute("UPDATE tg_accounts SET name=$1 WHERE id=$2", new_name, acc_id)
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_change_username_"))
 async def tg_change_username_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите новый username (без @):")
+    await callback.message.answer("Введите username (без @):")
     await state.set_state(ManageTG.waiting_new_username)
     await callback.answer()
 
@@ -848,24 +697,21 @@ async def tg_change_username(message: types.Message, state: FSMContext):
     try:
         await client.get_me()
         await client(UpdateUsernameRequest(username=new_username))
-        await message.answer(f"✅ Username успешно изменён на @{new_username}")
+        await message.answer(f"✅ Username изменён на @{new_username}")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
-# ========== ОТПРАВКА СООБЩЕНИЙ (без фото и документов) ==========
+# ========== ОТПРАВКА СООБЩЕНИЙ ==========
 @dp.callback_query(F.data.startswith("tg_send_msg_"))
 async def tg_send_msg_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username получателя (например, @username или 123456789):")
+    await callback.message.answer("Введите ID или username получателя:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
@@ -884,41 +730,27 @@ async def tg_send_text(message: types.Message, state: FSMContext):
     target = data["target"]
     text = message.text
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
             await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file = row["session_file"]
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
         await client.get_me()
-        try:
-            entity = await client.get_entity(target)
-        except ValueError:
-            if target.isdigit():
-                entity = await client.get_entity(int(target))
-            else:
-                raise Exception(f"Не удалось найти пользователя {target}")
+        entity = await client.get_entity(target)
         await client.send_message(entity, text)
         await message.answer(f"✅ Сообщение отправлено в {target}")
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(message.from_user.id, acc_id, phone)
-    except FloodWaitError as e:
-        await message.answer(f"⚠️ Слишком много запросов. Подождите {e.seconds} секунд.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
-# ========== ОТЛОЖЕННАЯ ОТПРАВКА ==========
 @dp.callback_query(F.data.startswith("tg_schedule_"))
 async def tg_schedule_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
     await callback.message.answer("Введите ID или username получателя:")
@@ -936,87 +768,65 @@ async def tg_schedule_target(message: types.Message, state: FSMContext):
 @dp.message(TGAction.waiting_message)
 async def tg_schedule_text(message: types.Message, state: FSMContext):
     await state.update_data(message_text=message.text)
-    await message.answer("Введите задержку в секундах (например, 60):")
+    await message.answer("Введите задержку (сек):")
     await state.set_state(TGAction.waiting_schedule_delay)
 
 @dp.message(TGAction.waiting_schedule_delay)
 async def tg_schedule_delay(message: types.Message, state: FSMContext):
     try:
         delay = int(message.text.strip())
-        if delay <= 0:
-            raise ValueError
+        if delay <= 0: raise ValueError
         data = await state.get_data()
         acc_id = data["acc_id"]
         target = data["target"]
         text = data["message_text"]
-        await message.answer(f"⏳ Сообщение будет отправлено через {delay} секунд.")
+        await message.answer(f"⏳ Отправлю через {delay} сек.")
         await asyncio.sleep(delay)
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+            row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
             if not row:
                 await message.answer("Аккаунт не найден")
                 await state.clear()
                 return
-            session_file, phone = row["session_file"], row["phone"]
+            session_file = row["session_file"]
         client = TelegramClient(session_file, API_ID, API_HASH)
         await client.connect()
         try:
             await client.get_me()
-            try:
-                entity = await client.get_entity(target)
-            except ValueError:
-                if target.isdigit():
-                    entity = await client.get_entity(int(target))
-                else:
-                    raise Exception("Не удалось найти пользователя")
+            entity = await client.get_entity(target)
             await client.send_message(entity, text)
-            await message.answer(f"✅ Отложенное сообщение отправлено в {target}")
-        except (AuthKeyError, UnauthorizedError):
-            await handle_session_error(message.from_user.id, acc_id, phone)
+            await message.answer(f"✅ Отправлено в {target}")
         except Exception as e:
-            await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+            await message.answer(f"❌ {get_russian_error(e)}")
         finally:
             await client.disconnect()
     except:
-        await message.answer("Введите корректное число секунд")
+        await message.answer("Введите число секунд")
     await state.clear()
 
-# ========== ДРУГИЕ ДЕЙСТВИЯ (диалоги, завершение сессий, обновление, вступление/выход, рассылка TG) ==========
 @dp.callback_query(F.data.startswith("tg_dialogs_"))
 async def tg_dialogs_start(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
         if not row:
             await callback.answer("Аккаунт не найден", show_alert=True)
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file = row["session_file"]
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
-        await client.get_me()
         dialogs = await client.get_dialogs()
-        text = "📋 Список диалогов (первые 20):\n"
-        for i, d in enumerate(dialogs[:20]):
-            name = d.name or str(d.entity.id)
-            text += f"{i+1}. {name} (ID: {d.entity.id})\n"
+        text = "📋 Диалоги:\n" + "\n".join([f"{i+1}. {d.name or d.entity.id}" for i, d in enumerate(dialogs[:20])])
         await callback.message.answer(text)
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(callback.from_user.id, acc_id, phone)
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await callback.message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_terminate_"))
 async def tg_terminate_sessions(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
@@ -1029,55 +839,41 @@ async def tg_terminate_sessions(callback: types.CallbackQuery):
     try:
         await client.get_me()
         await client.log_out()
-        await callback.message.answer("✅ Все сессии завершены. Аккаунт будет удалён из списка.")
-        await deactivate_tg_account(callback.from_user.id, acc_id)
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(callback.from_user.id, acc_id, phone)
+        await callback.message.answer("✅ Все сессии завершены. Аккаунт деактивирован.")
+        await delete_tg_account(callback.from_user.id, acc_id)
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await callback.message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_refresh_info_"))
 async def tg_refresh_info(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
         if not row:
             await callback.answer("Аккаунт не найден", show_alert=True)
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file = row["session_file"]
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
         me = await client.get_me()
-        if me is None:
-            await callback.message.answer("❌ Не удалось получить информацию об аккаунте.")
-            return
-        name = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or str(me.id)
-        async with db_pool.acquire() as conn:
-            await conn.execute("UPDATE tg_accounts SET name=$1 WHERE id=$2", name, acc_id)
+        name = f"{me.first_name or ''} {me.last_name or ''}".strip()
+        await conn.execute("UPDATE tg_accounts SET name=$1 WHERE id=$2", name, acc_id)
         await callback.message.answer(f"✅ Информация обновлена: {name}")
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(callback.from_user.id, acc_id, phone)
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await callback.message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_join_"))
 async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ссылку или username группы/канала:")
+    await callback.message.answer("Введите ссылку или username:")
     await state.set_state(TGAction.waiting_join_link)
     await callback.answer()
 
@@ -1085,45 +881,39 @@ async def tg_join_start(callback: types.CallbackQuery, state: FSMContext):
 async def tg_join_execute(message: types.Message, state: FSMContext):
     data = await state.get_data()
     acc_id = data["acc_id"]
+    link = message.text.strip()
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
             await message.answer("Аккаунт не найден")
             await state.clear()
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file = row["session_file"]
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
-    link = message.text.strip()
     try:
         await client.get_me()
         if "joinchat" in link:
             hash_match = re.search(r'joinchat/([A-Za-z0-9_-]+)', link)
             if hash_match:
                 await client(ImportChatInviteRequest(hash_match.group(1)))
-                await message.answer("✅ Вступил(а) по ссылке-приглашению")
             else:
-                raise Exception("Не удалось распознать ссылку")
+                raise Exception("Неверная ссылка")
         else:
             entity = await client.get_entity(link)
             await client(JoinChannelRequest(entity))
-        await message.answer(f"✅ Вступил(а) в {link}")
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(message.from_user.id, acc_id, phone)
+        await message.answer(f"✅ Вступил в {link}")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_leave_"))
 async def tg_leave_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username чата/группы:")
+    await callback.message.answer("Введите ID или username чата:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
@@ -1131,113 +921,89 @@ async def tg_leave_start(callback: types.CallbackQuery, state: FSMContext):
 async def tg_leave_execute(message: types.Message, state: FSMContext):
     data = await state.get_data()
     acc_id = data["acc_id"]
+    target = message.text.strip()
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
             await message.answer("Аккаунт не найден")
             await state.clear()
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file = row["session_file"]
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
-    target = message.text.strip()
     try:
-        await client.get_me()
         entity = await client.get_entity(target)
         await client.delete_dialog(entity)
-        await message.answer(f"✅ Вышел(а) из чата {target}")
-    except (AuthKeyError, UnauthorizedError):
-        await handle_session_error(message.from_user.id, acc_id, phone)
+        await message.answer(f"✅ Вышел из {target}")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"❌ {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
 
 @dp.callback_query(F.data.startswith("tg_broadcast_"))
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("📝 Введите текст рассылки:")
+    await callback.message.answer("Введите текст рассылки:")
     await state.set_state(BroadcastTG.waiting_text)
     await callback.answer()
 
 @dp.message(BroadcastTG.waiting_text)
 async def broadcast_tg_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text)
-    await message.answer("⏱ Введите задержку между сообщениями (сек, рекомендуется 5):")
+    await message.answer("Задержка (сек):")
     await state.set_state(BroadcastTG.waiting_delay)
 
 @dp.message(BroadcastTG.waiting_delay)
 async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     try:
         delay = float(message.text.strip())
-        if delay < 2:
-            await message.answer("⚠️ Слишком маленькая задержка. Установлено 2 сек.")
-            delay = 2
+        if delay < 2: delay = 2
         data = await state.get_data()
         text = data["text"]
         acc_id = data["acc_id"]
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+            row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
             if not row:
                 await message.answer("Аккаунт не найден")
                 await state.clear()
                 return
-            session_file, phone = row["session_file"], row["phone"]
+            session_file = row["session_file"]
         client = TelegramClient(session_file, API_ID, API_HASH)
         await client.connect()
         try:
-            await client.get_me()
             dialogs = await client.get_dialogs()
             targets = [d for d in dialogs if d.is_user]
             total = len(targets)
-            await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
+            await message.answer(f"Начинаю рассылку {total} получателям...")
             sent = 0
             for dialog in targets:
                 try:
                     await client.send_message(dialog.entity, text)
                     sent += 1
                     await asyncio.sleep(delay)
-                except FloodWaitError as e:
-                    await asyncio.sleep(e.seconds)
-                    try:
-                        await client.send_message(dialog.entity, text)
-                        sent += 1
-                    except:
-                        continue
-                except Exception:
+                except:
                     continue
             await message.answer(f"✅ Отправлено {sent} из {total}")
-        except (AuthKeyError, UnauthorizedError):
-            await handle_session_error(message.from_user.id, acc_id, phone)
+        except Exception as e:
+            await message.answer(f"❌ {get_russian_error(e)}")
         finally:
             await client.disconnect()
             await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-        await state.clear()# ========== VK АККАУНТЫ ==========
+    except:
+        await message.answer("Введите число")# ========== VK АККАУНТЫ ==========
 @dp.callback_query(F.data == "list_vk_accounts")
 async def list_vk_accounts(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     accounts = await get_user_vk_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text("У вас нет VK аккаунтов. Подключите новый.", reply_markup=back_button("my_accounts"))
-        await callback.answer()
+        await callback.message.edit_text("Нет VK аккаунтов.", reply_markup=back_button("my_accounts"))
         return
-    await callback.message.edit_text("Выберите аккаунт:", reply_markup=await vk_accounts_list(callback.from_user.id))
+    await callback.message.edit_text("Ваши VK аккаунты:", reply_markup=await vk_accounts_list(callback.from_user.id))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("vk_acc_"))
 async def vk_account_actions(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     accounts = await get_user_vk_accounts(callback.from_user.id)
     acc = next((a for a in accounts if a["id"] == acc_id), None)
@@ -1247,47 +1013,38 @@ async def vk_account_actions(callback: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Сделать активным" if not acc["is_active"] else "✅ Активен", callback_data=f"vk_set_active_{acc_id}")],
         [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"vk_broadcast_{acc_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"vk_del_{acc_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"vk_del_{acc_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="list_vk_accounts")]
     ])
-    await callback.message.edit_text(f"Аккаунт: {acc['name']}\nВыберите действие:", reply_markup=keyboard)
+    await callback.message.edit_text(f"Аккаунт: {acc['name']}", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("vk_set_active_"))
 async def vk_set_active(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[3])
     await set_active_vk_account(callback.from_user.id, acc_id)
-    await callback.answer("Аккаунт установлен как активный!", show_alert=True)
+    await callback.answer("Аккаунт активен", show_alert=True)
     await list_vk_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_del_"))
 async def vk_delete(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await delete_vk_account(callback.from_user.id, acc_id)
-    await callback.answer("Аккаунт удалён", show_alert=True)
+    await callback.answer("Удалён", show_alert=True)
     await list_vk_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_broadcast_"))
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("📝 Введите текст рассылки:")
+    await callback.message.answer("Текст рассылки:")
     await state.set_state(BroadcastVK.waiting_text)
     await callback.answer()
 
 @dp.message(BroadcastVK.waiting_text)
 async def broadcast_vk_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text)
-    await message.answer("⏱ Введите задержку между сообщениями (сек):")
+    await message.answer("Задержка (сек):")
     await state.set_state(BroadcastVK.waiting_delay)
 
 @dp.message(BroadcastVK.waiting_delay)
@@ -1310,7 +1067,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         convs = vk.messages.getConversations(count=200)["items"]
         targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
         total = len(targets)
-        await message.answer(f"Начинаю рассылку {total} получателям, задержка {delay} сек.")
+        await message.answer(f"Начинаю рассылку {total} получателям...")
         sent = 0
         for target in targets:
             try:
@@ -1327,46 +1084,124 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     except:
         await message.answer("Введите число")
 
+# ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
+@dp.callback_query(F.data == "add_tg")
+async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_platinum_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        return
+    await callback.message.answer("📞 Введите номер телефона (+79991234567):")
+    await state.set_state(AddTG.waiting_phone)
+    await callback.answer()
+
+@dp.message(AddTG.waiting_phone)
+async def add_tg_phone(message: types.Message, state: FSMContext):
+    phone = message.text.strip()
+    session_file = os.path.join(SESSIONS_DIR, f"{message.from_user.id}_{phone}.session")
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.send_code_request(phone)
+        await state.update_data(phone=phone, session_file=session_file, client=client)
+        await message.answer("🔑 Введите код из SMS:")
+        await state.set_state(AddTG.waiting_code)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await state.clear()
+
+@dp.message(AddTG.waiting_code)
+async def add_tg_code(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    data = await state.get_data()
+    client = data["client"]
+    phone = data["phone"]
+    try:
+        await client.sign_in(phone, code)
+        me = await client.get_me()
+        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+        await add_tg_account(message.from_user.id, phone, data["session_file"], name)
+        await message.answer(f"✅ Аккаунт {name} добавлен!")
+        await client.disconnect()
+        await state.clear()
+    except SessionPasswordNeededError:
+        await message.answer("🔒 Введите 2FA пароль:")
+        await state.set_state(AddTG.waiting_2fa)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await state.clear()
+
+@dp.message(AddTG.waiting_2fa)
+async def add_tg_2fa(message: types.Message, state: FSMContext):
+    password = message.text.strip()
+    data = await state.get_data()
+    client = data["client"]
+    try:
+        await client.sign_in(password=password)
+        me = await client.get_me()
+        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+        await add_tg_account(message.from_user.id, data["phone"], data["session_file"], name)
+        await message.answer(f"✅ Аккаунт {name} добавлен (2FA)!")
+        await client.disconnect()
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
+        await state.clear()
+
+@dp.callback_query(F.data == "add_vk")
+async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_platinum_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        return
+    await callback.message.answer("🔑 Введите токен VK (access_token):")
+    await state.set_state(AddVK.waiting_token)
+    await callback.answer()
+
+@dp.message(AddVK.waiting_token)
+async def add_vk_token(message: types.Message, state: FSMContext):
+    token = message.text.strip()
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        user = vk.users.get()[0]
+        name = f"{user['first_name']} {user['last_name']}"
+        await add_vk_account(message.from_user.id, token, name)
+        await message.answer(f"✅ VK аккаунт {name} добавлен!")
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await state.clear()
+
 # ========== ПОДПИСКА ==========
 @dp.callback_query(F.data == "buy_sub")
 async def buy_sub(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1 день - 2.5$", callback_data="tariff_day")],
         [InlineKeyboardButton(text="1 неделя - 9$", callback_data="tariff_week")],
         [InlineKeyboardButton(text="1 месяц - 15$", callback_data="tariff_month")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile")]
     ])
-    await callback.message.edit_text("Выберите тариф:", reply_markup=keyboard)
+    await callback.message.edit_text("Выберите тариф:", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tariff_"))
 async def process_tariff(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     tariff_key = callback.data.split("_")[1]
     tariff = TARIFFS[tariff_key]
     await state.update_data(tariff=tariff)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Оплатить с баланса", callback_data="pay_balance")],
         [InlineKeyboardButton(text="💳 Оплатить через CryptoBot", callback_data="pay_crypto")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_sub")]
     ])
-    await callback.message.edit_text(f"Тариф: {tariff['name']} - {tariff['price']}$\nВыберите способ оплаты:", reply_markup=keyboard)
+    await callback.message.edit_text(f"Тариф: {tariff['name']} - {tariff['price']}$", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "pay_balance")
 async def pay_balance(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     data = await state.get_data()
     tariff = data.get("tariff")
     if not tariff:
-        await callback.answer("Ошибка, выберите тариф заново", show_alert=True)
+        await callback.answer("Ошибка", show_alert=True)
         return
     user_id = callback.from_user.id
     balance = await get_balance(user_id)
@@ -1383,33 +1218,27 @@ crypto_pending = {}
 
 @dp.callback_query(F.data == "pay_crypto")
 async def pay_crypto(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     data = await state.get_data()
     tariff = data.get("tariff")
     if not tariff:
-        await callback.answer("Ошибка, выберите тариф заново", show_alert=True)
+        await callback.answer("Ошибка", show_alert=True)
         return
-    invoice = await create_crypto_invoice(tariff["price"], f"Подписка на {tariff['name']}")
+    invoice = await create_crypto_invoice(tariff["price"], f"Подписка {tariff['name']}")
     if not invoice:
-        await callback.answer("Ошибка создания счёта. Попробуйте позже.", show_alert=True)
+        await callback.answer("Ошибка создания счёта", show_alert=True)
         return
     crypto_pending[callback.from_user.id] = {"invoice_id": invoice["invoice_id"], "days": tariff["days"]}
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💸 Оплатить", url=invoice["pay_url"])],
         [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_sub_{invoice['invoice_id']}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_sub")]
     ])
-    await callback.message.edit_text(f"Оплатите {tariff['price']} USDT", reply_markup=keyboard)
+    await callback.message.edit_text(f"Оплатите {tariff['price']} USDT", reply_markup=kb)
     await state.clear()
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("check_sub_"))
 async def check_sub_payment(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     invoice_id = callback.data.split("_")[2]
     status = await check_crypto_invoice(invoice_id)
     if status == "paid":
@@ -1419,7 +1248,7 @@ async def check_sub_payment(callback: types.CallbackQuery):
             del crypto_pending[callback.from_user.id]
             await callback.message.edit_text(f"✅ Подписка активирована на {days} дней!", reply_markup=main_menu(callback.from_user.id))
         else:
-            await callback.message.edit_text("Оплата подтверждена, но ошибка", reply_markup=main_menu(callback.from_user.id))
+            await callback.message.edit_text("Оплата подтверждена", reply_markup=main_menu(callback.from_user.id))
     elif status == "pending":
         await callback.answer("⏳ Платёж не обработан", show_alert=True)
     else:
@@ -1431,43 +1260,35 @@ deposit_pending = {}
 
 @dp.callback_query(F.data == "deposit")
 async def deposit_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     await callback.message.answer("💰 Сумма пополнения (мин 1$):")
     await state.set_state(Deposit.waiting_amount)
     await callback.answer()
 
 @dp.message(Deposit.waiting_amount)
 async def deposit_amount(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
     try:
         amount = float(message.text.strip())
         if amount < 1:
             await message.answer("Мин 1$")
             return
-        invoice = await create_crypto_invoice(amount, f"Пополнение баланса на {amount}$")
+        invoice = await create_crypto_invoice(amount, f"Пополнение на {amount}$")
         if not invoice:
             await message.answer("Ошибка создания счёта", reply_markup=back_button("profile"))
             await state.clear()
             return
         deposit_pending[message.from_user.id] = {"invoice_id": invoice["invoice_id"], "amount": amount}
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💸 Оплатить", url=invoice["pay_url"])],
-            [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_dep_{invoice['invoice_id']}")],
+            [InlineKeyboardButton(text="✅ Проверить", callback_data=f"check_dep_{invoice['invoice_id']}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="profile")]
         ])
-        await message.answer(f"Счёт на {amount} USDT", reply_markup=keyboard)
+        await message.answer(f"Счёт на {amount} USDT", reply_markup=kb)
     except:
         await message.answer("Введите число")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("check_dep_"))
 async def check_dep_payment(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     invoice_id = callback.data.split("_")[2]
     status = await check_crypto_invoice(invoice_id)
     if status == "paid":
@@ -1477,7 +1298,7 @@ async def check_dep_payment(callback: types.CallbackQuery):
             del deposit_pending[callback.from_user.id]
             await callback.message.edit_text(f"✅ Пополнение на {amount}$ успешно!", reply_markup=main_menu(callback.from_user.id))
         else:
-            await callback.message.edit_text("Ошибка зачисления", reply_markup=main_menu(callback.from_user.id))
+            await callback.message.edit_text("Ошибка", reply_markup=main_menu(callback.from_user.id))
     elif status == "pending":
         await callback.answer("⏳ Платёж не обработан", show_alert=True)
     else:
@@ -1486,17 +1307,12 @@ async def check_dep_payment(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     await callback.message.answer("💰 Сумма вывода (мин 10$):")
     await state.set_state(Withdraw.waiting_amount)
     await callback.answer()
 
 @dp.message(Withdraw.waiting_amount)
 async def withdraw_amount(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
     try:
         amount = float(message.text.strip())
         if amount < 10:
@@ -1514,8 +1330,6 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
 
 @dp.message(Withdraw.waiting_wallet)
 async def withdraw_wallet(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
     wallet = message.text.strip()
     data = await state.get_data()
     amount = data["amount"]
@@ -1524,227 +1338,25 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}$\nКошелёк: {wallet}")
     await state.clear()
 
-# ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ (TG и VK) ==========
-@dp.callback_query(F.data == "add_tg")
-async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна платная подписка!", show_alert=True)
-        return
-    await callback.message.answer("📞 Введите номер телефона в формате +79991234567:")
-    await state.set_state(AddTG.waiting_phone)
-    await callback.answer()
-
-@dp.message(AddTG.waiting_phone)
-async def add_tg_phone(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    phone = message.text.strip()
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-    session_file = os.path.join(SESSIONS_DIR, f"{message.from_user.id}_{phone}.session")
-    client = TelegramClient(session_file, API_ID, API_HASH)
-    await client.connect()
-    try:
-        await client.send_code_request(phone)
-        await state.update_data(phone=phone, session_file=session_file, client=client)
-        await message.answer("🔑 Введите код из SMS (код действует 3 минуты):")
-        await state.set_state(AddTG.waiting_code)
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-        await state.clear()
-
-@dp.message(AddTG.waiting_code)
-async def add_tg_code(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    code = message.text.strip()
-    data = await state.get_data()
-    client = data["client"]
-    phone = data["phone"]
-    try:
-        await client.sign_in(phone, code)
-        me = await client.get_me()
-        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-        await add_tg_account(message.from_user.id, phone, data["session_file"], name)
-        await show_tg_account_info(message, client, phone)
-        await client.disconnect()
-        await state.clear()
-    except SessionPasswordNeededError:
-        await message.answer("🔒 Введите двухфакторный пароль:")
-        await state.set_state(AddTG.waiting_2fa)
-    except Exception as e:
-        error = str(e)
-        if "expired" in error.lower():
-            await message.answer("❌ Код истёк. Отправляю новый...")
-            await client.send_code_request(phone)
-        else:
-            await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-            await client.disconnect()
-            await state.clear()
-
-@dp.message(AddTG.waiting_2fa)
-async def add_tg_2fa(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    password = message.text.strip()
-    data = await state.get_data()
-    client = data["client"]
-    try:
-        await client.sign_in(password=password)
-        me = await client.get_me()
-        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-        await add_tg_account(message.from_user.id, data["phone"], data["session_file"], name)
-        await show_tg_account_info(message, client, data["phone"])
-        await client.disconnect()
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
-        await client.disconnect()
-        await state.clear()
-
-async def show_tg_account_info(message: types.Message, client: TelegramClient, phone: str):
-    try:
-        if not client.is_connected():
-            await client.connect()
-        me = await client.get_me()
-        if me is None:
-            await message.answer("❌ Не удалось получить информацию об аккаунте.")
-            return
-        country_map = {"7": "🇷🇺 Россия", "380": "🇺🇦 Украина", "375": "🇧🇾 Беларусь", "1": "🇺🇸 США", "44": "🇬🇧 Великобритания", "49": "🇩🇪 Германия", "90": "🇹🇷 Турция", "86": "🇨🇳 Китай", "91": "🇮🇳 Индия"}
-        country = "Неизвестно"
-        if phone and phone.startswith('+'):
-            for code in country_map:
-                if phone.startswith('+' + code):
-                    country = country_map[code]
-                    break
-        spam_status = "✅ Нет ограничений"
-        try:
-            spambot = await client.get_entity('@Spambot')
-            await client.send_message(spambot, '/start')
-            await asyncio.sleep(2)
-            async for msg in client.iter_messages(spambot, limit=1):
-                if msg and msg.text:
-                    if 'no restrictions' in msg.text.lower():
-                        spam_status = "✅ Нет ограничений"
-                    elif 'limited' in msg.text.lower() or 'restricted' in msg.text.lower():
-                        spam_status = "⚠️ Есть ограничения (спам-блок активен)"
-        except:
-            spam_status = "❓ Не удалось проверить"
-        dialogs = await client.get_dialogs()
-        users = [d for d in dialogs if d.is_user]
-        total_contacts = len(users)
-        total_dialogs = len(dialogs)
-        mutual = 0
-        for user in users[:50]:
-            try:
-                async for _ in client.iter_messages(user.entity, limit=1):
-                    mutual += 1
-                    break
-            except:
-                pass
-        info = (
-            f"📱 *Telegram аккаунт*\n"
-            f"📞 Номер: `{phone[:4]}****{phone[-3:] if len(phone)>7 else ''}`\n"
-            f"🆔 ID: `{me.id}`\n"
-            f"👤 Имя: {me.first_name or ''} {me.last_name or ''}\n"
-            f"🌍 Страна: {country}\n"
-            f"🔒 Спам-блок: {spam_status}\n"
-            f"👥 Контактов (всего): {total_contacts}\n"
-            f"💬 Диалогов (всего): {total_dialogs}\n"
-            f"🤝 Взаимных контактов (приблизительно): {mutual}\n"
-            f"✅ Аккаунт подключён!"
-        )
-        await message.answer(info, parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка получения информации: {get_russian_error(e)}")
-
-@dp.callback_query(F.data == "add_vk")
-async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна подписка!", show_alert=True)
-        return
-    await callback.message.answer("🔑 Введите токен VK (access_token) с правами на сообщения и друзей:")
-    await state.set_state(AddVK.waiting_token)
-    await callback.answer()
-
-@dp.message(AddVK.waiting_token)
-async def add_vk_token(message: types.Message, state: FSMContext):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-    token = message.text.strip()
-    try:
-        vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()
-        user = vk.users.get(fields="city, country, followers_count, bdate")[0]
-        name = f"{user['first_name']} {user['last_name']}"
-        await add_vk_account(message.from_user.id, token, name)
-        await show_vk_account_info(message, token)
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Неверный токен или ошибка: {get_russian_error(e)}")
-        await state.clear()
-
-async def show_vk_account_info(message: types.Message, token: str):
-    try:
-        vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()
-        user = vk.users.get(fields="city, country, followers_count, bdate")[0]
-        user_id = user['id']
-        first_name = user.get('first_name', '')
-        last_name = user.get('last_name', '')
-        city = user.get('city', {}).get('title', 'Не указан')
-        country = user.get('country', {}).get('title', 'Не указана')
-        bdate = user.get('bdate', 'Не указана')
-        followers = user.get('followers_count', 0)
-        friends = vk.friends.get()['count']
-        online = vk.friends.getOnline()['count'] if 'count' in vk.friends.getOnline() else 0
-        info = (
-            f"📘 *VK аккаунт*\n"
-            f"👤 Имя: {first_name} {last_name}\n"
-            f"🆔 ID: {user_id}\n"
-            f"🏙️ Город: {city}\n"
-            f"🌍 Страна: {country}\n"
-            f"🎂 Дата рождения: {bdate}\n"
-            f"👥 Друзей: {friends}\n"
-            f"👁️ Подписчиков: {followers}\n"
-            f"🟢 Онлайн друзей: {online}\n"
-            f"✅ Аккаунт подключён!"
-        )
-        await message.answer(info, parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-
 # ========== ИГРЫ ==========
 @dp.callback_query(F.data == "game_menu")
 async def game_menu_callback(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     await callback.message.edit_text("🎲 Выберите игру:", reply_markup=game_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "game_cube")
 async def game_cube_menu(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    await callback.message.edit_text("🎲 Выберите режим игры в куб:", reply_markup=cube_menu())
+    await callback.message.edit_text("🎲 Режимы куба:", reply_markup=cube_menu())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("cube_"))
 async def game_cube_start(callback: types.CallbackQuery, state: FSMContext):
-    cube_mode = callback.data
-    await state.update_data(cube_mode=cube_mode)   # обязательно
+    await state.update_data(cube_mode=callback.data)
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
 
-
+# Главный обработчик ставки
 @dp.message(GameBet.waiting_bet)
 async def game_bet(message: types.Message, state: FSMContext):
     try:
@@ -1756,44 +1368,30 @@ async def game_bet(message: types.Message, state: FSMContext):
         if bet > balance:
             await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}$")
             return
-
-        # Сохраняем ставку
         await state.update_data(bet=bet)
         data = await state.get_data()
-
-        # Определяем режим
         if "cube_mode" in data:
             mode = data["cube_mode"]
-            if mode in ["cube_less_more", "cube_even_odd", "cube_35"]:
+            if mode in ("cube_less_more", "cube_even_odd", "cube_35"):
                 if mode == "cube_less_more":
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_less"),
-                         InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_more")]
-                    ])
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_more")]])
                 elif mode == "cube_even_odd":
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Чёт", callback_data="cube_even"),
-                         InlineKeyboardButton(text="Нечет", callback_data="cube_odd")]
-                    ])
-                else:  # cube_35
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Больше 3.5", callback_data="cube_gt35"),
-                         InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_lt35")]
-                    ])
-                await message.answer("Выберите вариант:", reply_markup=keyboard)
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="cube_even"), InlineKeyboardButton(text="Нечет", callback_data="cube_odd")]])
+                else:
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_lt35")]])
+                await message.answer("Выберите вариант:", reply_markup=kb)
                 await state.set_state(GameCube.waiting_choice)
             elif mode == "cube_exact":
                 await message.answer("Введите число от 1 до 6:")
                 await state.set_state(GameCube.waiting_exact)
             elif mode == "cube_range":
-                await message.answer("Введите диапазон в формате 'нижняя-верхняя' (например, 2-4):")
+                await message.answer("Введите диапазон (например, 2-4):")
                 await state.set_state(GameCube.waiting_range)
             else:
-                await message.answer("❌ Ошибка: неизвестный режим. Начните заново.")
+                await message.answer("❌ Неизвестный режим")
                 await state.clear()
         elif "basketball_mode" in data:
             await state.set_state(GameBasketball.waiting_choice)
-            # Вызываем функцию броска (она сама обработает)
             await game_basketball_choice_after_bet(message, state)
         elif "darts_mode" in data:
             await state.set_state(GameDarts.waiting_choice)
@@ -1802,15 +1400,12 @@ async def game_bet(message: types.Message, state: FSMContext):
             await state.set_state(GameFootball.waiting_choice)
             await game_football_choice_after_bet(message, state)
         else:
-            await message.answer("❌ Ошибка: не выбран режим игры. Начните через меню игр.")
+            await message.answer("❌ Ошибка: выберите игру через меню")
             await state.clear()
     except ValueError:
-        await message.answer("❌ Введите число (ставку)")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}")
-        await state.clear()
+        await message.answer("❌ Введите число")
 
-# --- Кубик ---
+# Кубик: выбор в режимах
 @dp.callback_query(GameCube.waiting_choice)
 async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -1822,19 +1417,16 @@ async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
     await asyncio.sleep(1)
     win = False
     if mode == "cube_less_more":
-        if choice == "cube_less" and roll <= 3: win = True
-        elif choice == "cube_more" and roll >= 4: win = True
+        win = (choice == "cube_less" and roll <= 3) or (choice == "cube_more" and roll >= 4)
     elif mode == "cube_even_odd":
-        if choice == "cube_even" and roll % 2 == 0: win = True
-        elif choice == "cube_odd" and roll % 2 == 1: win = True
+        win = (choice == "cube_even" and roll % 2 == 0) or (choice == "cube_odd" and roll % 2 == 1)
     elif mode == "cube_35":
-        if choice == "cube_gt35" and roll > 3.5: win = True
-        elif choice == "cube_lt35" and roll < 3.5: win = True
+        win = (choice == "cube_gt35" and roll > 3.5) or (choice == "cube_lt35" and roll < 3.5)
     if win:
         payout = bet * 2
         await update_balance(callback.from_user.id, payout)
         new_balance = await get_balance(callback.from_user.id)
-        result = f"🎲 Выпало {roll}\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"🎲 Выпало {roll}\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
     else:
         await update_balance(callback.from_user.id, -bet)
         new_balance = await get_balance(callback.from_user.id)
@@ -1847,8 +1439,7 @@ async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
 async def game_cube_exact(message: types.Message, state: FSMContext):
     try:
         num = int(message.text.strip())
-        if num < 1 or num > 6:
-            raise ValueError
+        if num < 1 or num > 6: raise ValueError
         data = await state.get_data()
         bet = data["bet"]
         msg = await message.answer_dice(emoji="🎲")
@@ -1858,7 +1449,7 @@ async def game_cube_exact(message: types.Message, state: FSMContext):
             payout = bet * 6
             await update_balance(message.from_user.id, payout)
             new_balance = await get_balance(message.from_user.id)
-            result = f"🎲 Выпало {roll}\n✅ УГАДАЛ! Выигрыш: {bet}$ x6 = {payout}$\n💰 Баланс: {new_balance:.2f}$"
+            result = f"🎲 Выпало {roll}\n✅ УГАДАЛ! Выигрыш: {bet}$ x6 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
         else:
             await update_balance(message.from_user.id, -bet)
             new_balance = await get_balance(message.from_user.id)
@@ -1868,67 +1459,47 @@ async def game_cube_exact(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Введите число от 1 до 6")
 
-
 @dp.message(GameCube.waiting_range)
 async def game_cube_range(message: types.Message, state: FSMContext):
     try:
         parts = message.text.strip().split('-')
-        low = int(parts[0])
-        high = int(parts[1])
-        if low < 1 or high > 6 or low > high:
-            raise ValueError
-
-        # Рассчитываем коэффициент
+        low = int(parts[0]); high = int(parts[1])
+        if low < 1 or high > 6 or low > high: raise ValueError
         count = high - low + 1
         if count == 6:
-            coeff = 1.0  # выигрыш всегда, но без профита
+            coeff = 1.0
         else:
             coeff = 6.0 / count
-            # Округляем до 1 знака
             coeff = round(coeff, 1)
-            if coeff < 1.2:
-                coeff = 1.2
-
+            if coeff < 1.2: coeff = 1.2
         data = await state.get_data()
         bet = data["bet"]
         msg = await message.answer_dice(emoji="🎲")
         roll = msg.dice.value
         await asyncio.sleep(1)
-
         if low <= roll <= high:
             payout = bet * coeff
             await update_balance(message.from_user.id, payout)
             new_balance = await get_balance(message.from_user.id)
-            result = (f"🎲 Выпало {roll}\n✅ ПОПАЛ В ДИАПАЗОН!\n"
-                      f"Коэффициент: {coeff}x\nВыигрыш: {bet} x {coeff} = {payout:.2f}$\n"
-                      f"💰 Баланс: {new_balance:.2f}$")
+            result = f"🎲 Выпало {roll}\n✅ ПОПАЛ! Коэф: {coeff}x, Выигрыш: {bet}$ x{coeff} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
         else:
             await update_balance(message.from_user.id, -bet)
             new_balance = await get_balance(message.from_user.id)
-            result = (f"🎲 Выпало {roll}\n❌ МИМО ДИАПАЗОНА!\n"
-                      f"Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$")
-
+            result = f"🎲 Выпало {roll}\n❌ МИМО. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
         await message.answer(result, reply_markup=after_game_menu())
         await state.clear()
     except:
-        await message.answer("❌ Неверный формат. Пример: 2-4")
+        await message.answer("❌ Пример: 2-4")
 
-# --- Баскетбол ---
+# Баскетбол
 @dp.callback_query(F.data == "game_basketball")
-async def game_basketball_menu(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    await callback.message.edit_text("🏀 Выберите исход баскетбольного броска:", reply_markup=basketball_menu())
+async def game_basketball_menu(callback: types.CallbackQuery):
+    await callback.message.edit_text("🏀 Выберите исход:", reply_markup=basketball_menu())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("basket_"))
 async def game_basketball_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    mode = callback.data
-    await state.update_data(basketball_mode=mode)
+    await state.update_data(basketball_mode=callback.data)
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1955,30 +1526,23 @@ async def game_basketball_choice_after_bet(message: types.Message, state: FSMCon
         payout = bet * outcome["mult"]
         await update_balance(message.from_user.id, payout)
         new_balance = await get_balance(message.from_user.id)
-        result = f"🏀 Бросок: {value}\n✅ {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"🏀 {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
     else:
         await update_balance(message.from_user.id, -bet)
         new_balance = await get_balance(message.from_user.id)
-        result = f"🏀 Бросок: {value}\n❌ {outcome['name']} не удалось. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"🏀 {outcome['name']} не удалось. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
     await message.answer(result, reply_markup=after_game_menu())
     await state.clear()
 
-# --- Дартс ---
+# Дартс
 @dp.callback_query(F.data == "game_darts")
-async def game_darts_menu(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    await callback.message.edit_text("🎯 Выберите исход в дартсе:", reply_markup=darts_menu())
+async def game_darts_menu(callback: types.CallbackQuery):
+    await callback.message.edit_text("🎯 Выберите исход:", reply_markup=darts_menu())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("darts_"))
 async def game_darts_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    mode = callback.data
-    await state.update_data(darts_mode=mode)
+    await state.update_data(darts_mode=callback.data)
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -2003,30 +1567,23 @@ async def game_darts_choice_after_bet(message: types.Message, state: FSMContext)
         payout = bet * outcome["mult"]
         await update_balance(message.from_user.id, payout)
         new_balance = await get_balance(message.from_user.id)
-        result = f"🎯 Выпало {value}\n✅ {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"🎯 {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
     else:
         await update_balance(message.from_user.id, -bet)
         new_balance = await get_balance(message.from_user.id)
-        result = f"🎯 Выпало {value}\n❌ {outcome['name']} не выпало. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"🎯 {outcome['name']} не выпало. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
     await message.answer(result, reply_markup=after_game_menu())
     await state.clear()
 
-# --- Футбол ---
+# Футбол
 @dp.callback_query(F.data == "game_football")
-async def game_football_menu(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    await callback.message.edit_text("⚽ Выберите исход футбольного удара:", reply_markup=football_menu())
+async def game_football_menu(callback: types.CallbackQuery):
+    await callback.message.edit_text("⚽ Выберите исход:", reply_markup=football_menu())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("foot_"))
 async def game_football_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
-    mode = callback.data
-    await state.update_data(football_mode=mode)
+    await state.update_data(football_mode=callback.data)
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -2053,46 +1610,40 @@ async def game_football_choice_after_bet(message: types.Message, state: FSMConte
         payout = bet * outcome["mult"]
         await update_balance(message.from_user.id, payout)
         new_balance = await get_balance(message.from_user.id)
-        result = f"⚽ Удар: {value}\n✅ {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"⚽ {outcome['name']}! Выигрыш: {bet}$ x{outcome['mult']} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
     else:
         await update_balance(message.from_user.id, -bet)
         new_balance = await get_balance(message.from_user.id)
-        result = f"⚽ Удар: {value}\n❌ {outcome['name']} не забит. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
+        result = f"⚽ {outcome['name']} не забит. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
     await message.answer(result, reply_markup=after_game_menu())
     await state.clear()
 
 @dp.callback_query(F.data == "again")
 async def again_game(callback: types.CallbackQuery):
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
-        return
     await game_menu_callback(callback)
 
 @dp.callback_query(F.data == "inc_bet")
 async def inc_bet(callback: types.CallbackQuery):
-    await callback.answer("Функция повышения ставки будет добавлена позже", show_alert=True)
+    await callback.answer("Функция в разработке", show_alert=True)
 
 @dp.callback_query(F.data == "dec_bet")
 async def dec_bet(callback: types.CallbackQuery):
-    await callback.answer("Функция понижения ставки будет добавлена позже", show_alert=True)
+    await callback.answer("Функция в разработке", show_alert=True)
 
 @dp.callback_query(F.data == "all_in")
 async def all_in(callback: types.CallbackQuery):
-    await callback.answer("Функция ва-банк будет добавлена позже", show_alert=True)
+    await callback.answer("Функция в разработке", show_alert=True)
 
-# ========== АДМИН-ПАНЕЛЬ (выдача подписки, пагинация, статистика, промокоды, глобал рассылка) ==========
+# ========== АДМИН-ПАНЕЛЬ ==========
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        return
-    if callback.message.chat.type != ChatType.PRIVATE:
-        await callback.answer("Только в ЛС", show_alert=True)
+        await callback.answer("❌ Нет доступа", show_alert=True)
         return
     await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
     await callback.answer()
 
-# ---- Выдача подписки админом ----
+# --- Выдача подписки ---
 @dp.callback_query(F.data == "admin_give_sub")
 async def admin_give_sub_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
@@ -2114,8 +1665,7 @@ async def admin_give_sub_user(message: types.Message, state: FSMContext):
 async def admin_give_sub_days(message: types.Message, state: FSMContext):
     try:
         days = int(message.text.strip())
-        if days <= 0:
-            raise ValueError
+        if days <= 0: raise ValueError
         data = await state.get_data()
         user_id = data["user_id"]
         await set_subscription(user_id, days)
@@ -2123,9 +1673,9 @@ async def admin_give_sub_days(message: types.Message, state: FSMContext):
         await bot.send_message(user_id, f"🎁 Администратор выдал вам подписку на {days} дней!")
         await state.clear()
     except:
-        await message.answer("❌ Введите положительное число дней")
+        await message.answer("❌ Введите положительное число")
 
-# ---- Выдача / списание баланса ----
+# --- Выдача / списание баланса ---
 @dp.callback_query(F.data == "admin_add_balance")
 async def admin_add_balance_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
@@ -2147,13 +1697,12 @@ async def admin_add_balance_user(message: types.Message, state: FSMContext):
 async def admin_add_balance_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.strip())
-        if amount <= 0:
-            raise ValueError
+        if amount <= 0: raise ValueError
         data = await state.get_data()
         user_id = data["user_id"]
         await update_balance(user_id, amount)
         await message.answer(f"✅ Пользователю {user_id} начислено {amount}$")
-        await bot.send_message(user_id, f"💰 Вам начислено {amount}$ на баланс!")
+        await bot.send_message(user_id, f"💰 Вам начислено {amount}$")
         await state.clear()
     except:
         await message.answer("❌ Введите положительное число")
@@ -2179,13 +1728,12 @@ async def admin_remove_balance_user(message: types.Message, state: FSMContext):
 async def admin_remove_balance_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.strip())
-        if amount <= 0:
-            raise ValueError
+        if amount <= 0: raise ValueError
         data = await state.get_data()
         user_id = data["user_id"]
         current = await get_balance(user_id)
         if current < amount:
-            await message.answer(f"❌ Недостаточно средств. Баланс пользователя: {current}$")
+            await message.answer(f"❌ Недостаточно. Баланс: {current}$")
             return
         await update_balance(user_id, -amount)
         await message.answer(f"✅ У пользователя {user_id} списано {amount}$")
@@ -2194,88 +1742,86 @@ async def admin_remove_balance_amount(message: types.Message, state: FSMContext)
     except:
         await message.answer("❌ Введите положительное число")
 
-# ---- Статистика ----
+# --- Статистика ---
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     users = await get_all_users()
-    total_users = len(users)
-    active_subs = sum(1 for u in users if u["sub_until"] > int(time.time()))
+    total = len(users)
+    active = sum(1 for u in users if u["sub_until"] > int(time.time()))
     total_balance = sum(u["balance"] for u in users)
     async with db_pool.acquire() as conn:
         tg_count = await conn.fetchval("SELECT COUNT(*) FROM tg_accounts")
         vk_count = await conn.fetchval("SELECT COUNT(*) FROM vk_accounts")
-    text = (f"📊 *Статистика бота*\n\n👥 Всего пользователей: {total_users}\n"
-            f"💎 Активных подписок: {active_subs}\n💰 Общий баланс: {total_balance:.2f}$\n"
-            f"📱 Telegram аккаунтов: {tg_count}\n📘 VK аккаунтов: {vk_count}")
+    text = (f"📊 Статистика:\n👥 Пользователей: {total}\n💎 Активных подписок: {active}\n💰 Общий баланс: {total_balance:.2f}$\n"
+            f"📱 TG аккаунтов: {tg_count}\n📘 VK аккаунтов: {vk_count}")
     try:
-        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_button("admin_panel"))
+        await callback.message.edit_text(text, reply_markup=back_button("admin_panel"))
     except:
-        await callback.message.answer(text, parse_mode="Markdown", reply_markup=back_button("admin_panel"))
+        await callback.message.answer(text, reply_markup=back_button("admin_panel"))
     await callback.answer()
 
-# ---- Заявки на вывод ----
+# --- Заявки на вывод ---
 @dp.callback_query(F.data == "admin_withdraws")
 async def admin_withdraws(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
-    requests = await get_pending_withdraws()
-    if not requests:
-        await callback.message.edit_text("Нет заявок на вывод", reply_markup=back_button("admin_panel"))
+    reqs = await get_pending_withdraws()
+    if not reqs:
+        await callback.message.edit_text("Нет заявок", reply_markup=back_button("admin_panel"))
         return
-    text = "💰 *Заявки на вывод:*\n\n"
-    for req in requests:
-        text += f"🆔 Заявка #{req[0]}\n👤 Пользователь: {req[1]}\n💵 Сумма: {req[2]}$\n💳 Кошелек: {req[3]}\n\n"
+    text = "💰 Заявки на вывод:\n\n"
+    for r in reqs:
+        text += f"#{r[0]} | Пользователь: {r[1]} | {r[2]}$ | {r[3]}\n"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data="withdraw_approve"),
-         InlineKeyboardButton(text="❌ Отклонить", callback_data="withdraw_reject")],
+        [InlineKeyboardButton(text="✅ Принять", callback_data="withdraw_approve"), InlineKeyboardButton(text="❌ Отклонить", callback_data="withdraw_reject")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_panel")]
     ])
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "withdraw_approve")
 async def withdraw_approve(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
-    requests = await get_pending_withdraws()
-    if not requests:
+    reqs = await get_pending_withdraws()
+    if not reqs:
         await callback.answer("Нет заявок", show_alert=True)
         return
-    req_id, user_id, amount, wallet = requests[0]
+    req_id, user_id, amount, wallet = reqs[0]
     await update_withdraw_status(req_id, "approved")
-    await bot.send_message(user_id, f"✅ Ваша заявка на вывод {amount}$ одобрена. Ожидайте перевод.")
-    await callback.answer("Заявка одобрена", show_alert=True)
+    await bot.send_message(user_id, f"✅ Ваша заявка на вывод {amount}$ одобрена.")
+    await callback.answer("Одобрено", show_alert=True)
     await admin_withdraws(callback)
 
 @dp.callback_query(F.data == "withdraw_reject")
 async def withdraw_reject(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
-    requests = await get_pending_withdraws()
-    if not requests:
+    reqs = await get_pending_withdraws()
+    if not reqs:
         await callback.answer("Нет заявок", show_alert=True)
         return
-    req_id, user_id, amount, wallet = requests[0]
+    req_id, user_id, amount, wallet = reqs[0]
     await update_withdraw_status(req_id, "rejected")
     await update_balance(user_id, amount)  # возврат
-    await bot.send_message(user_id, f"❌ Ваша заявка на вывод {amount}$ отклонена. Средства возвращены.")
-    await callback.answer("Заявка отклонена", show_alert=True)
+    await bot.send_message(user_id, f"❌ Заявка на вывод {amount}$ отклонена. Средства возвращены.")
+    await callback.answer("Отклонено", show_alert=True)
     await admin_withdraws(callback)
 
-# ---- Промокоды (админ) ----
+# --- Промокоды (админ) ---
 @dp.callback_query(F.data == "admin_promocodes")
 async def admin_promocodes_menu(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_create_promo")],
-        [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin_list_promos")],
+        [InlineKeyboardButton(text="➕ Создать", callback_data="admin_create_promo")],
+        [InlineKeyboardButton(text="📋 Список", callback_data="admin_list_promos")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_panel")]
     ])
-    await callback.message.edit_text("🎫 Управление промокодами", reply_markup=kb)
+    await callback.message.edit_text("🎫 Промокоды", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_create_promo")
 async def create_promo_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await callback.message.answer("Введите код промокода (латиница, цифры):")
+    await callback.message.answer("Введите код промокода:")
     await state.set_state(AdminCreatePromocode.waiting_code)
     await callback.answer()
 
@@ -2283,7 +1829,7 @@ async def create_promo_start(callback: types.CallbackQuery, state: FSMContext):
 async def create_promo_code(message: types.Message, state: FSMContext):
     code = message.text.strip().upper()
     await state.update_data(code=code)
-    await message.answer("Введите количество дней подписки (число):")
+    await message.answer("Введите количество дней:")
     await state.set_state(AdminCreatePromocode.waiting_days)
 
 @dp.message(AdminCreatePromocode.waiting_days)
@@ -2292,10 +1838,10 @@ async def create_promo_days(message: types.Message, state: FSMContext):
         days = int(message.text.strip())
         if days <= 0: raise ValueError
         await state.update_data(days=days)
-        await message.answer("Введите максимальное количество использований (1-999):")
+        await message.answer("Макс. использований:")
         await state.set_state(AdminCreatePromocode.waiting_max_uses)
     except:
-        await message.answer("❌ Введите целое положительное число")
+        await message.answer("Введите число >0")
 
 @dp.message(AdminCreatePromocode.waiting_max_uses)
 async def create_promo_max_uses(message: types.Message, state: FSMContext):
@@ -2304,27 +1850,24 @@ async def create_promo_max_uses(message: types.Message, state: FSMContext):
         if max_uses < 1: raise ValueError
         data = await state.get_data()
         await create_promocode(data["code"], data["days"], max_uses)
-        await message.answer(f"✅ Промокод `{data['code']}` создан!\nДней: {data['days']}\nМакс. использований: {max_uses}", parse_mode="Markdown")
-    except:
-        await message.answer("❌ Введите число от 1 до 999")
-    finally:
+        await message.answer(f"✅ Промокод {data['code']} создан!")
         await state.clear()
+    except:
+        await message.answer("Введите число от 1")
 
 @dp.callback_query(F.data == "admin_list_promos")
-async def list_promocodes(callback: types.CallbackQuery):
+async def list_promocodes_admin(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     promos = await get_all_promocodes()
     if not promos:
-        await callback.message.edit_text("Нет созданных промокодов.", reply_markup=back_button("admin_promocodes"))
+        await callback.message.edit_text("Нет промокодов.", reply_markup=back_button("admin_promocodes"))
         return
-    text = "🎫 *Список промокодов:*\n\n"
+    text = "Список промокодов:\n"
     for p in promos:
-        text += f"🔹 `{p['code']}` – {p['days']} дней, использован {p['uses']}/{p['max_uses']}\n"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data="admin_delete_promo")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_promocodes")]
-    ])
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+        text += f"🔹 {p['code']} – {p['days']} дней, {p['uses']}/{p['max_uses']}\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить", callback_data="admin_delete_promo")], [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_promocodes")]])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
 
 @dp.callback_query(F.data == "admin_delete_promo")
 async def delete_promo_start(callback: types.CallbackQuery):
@@ -2340,10 +1883,10 @@ async def delete_promo_start(callback: types.CallbackQuery):
 async def delete_promo_exec(callback: types.CallbackQuery):
     promo_id = int(callback.data.split("_")[2])
     await delete_promocode(promo_id)
-    await callback.answer("Промокод удалён", show_alert=True)
+    await callback.answer("Удалён", show_alert=True)
     await admin_promocodes_menu(callback)
 
-# ---- Активация промокода пользователем (только 1 раз) ----
+# --- Активация промокода пользователем (только 1 раз) ---
 @dp.callback_query(F.data == "activate_promo")
 async def activate_promo_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите промокод:")
@@ -2359,7 +1902,6 @@ async def activate_promo_exec(message: types.Message, state: FSMContext):
         await message.answer("❌ Неверный промокод")
         await state.clear()
         return
-    # Проверка, использовал ли пользователь уже этот промокод
     async with db_pool.acquire() as conn:
         used = await conn.fetchval("SELECT 1 FROM used_promocodes WHERE user_id=$1 AND code_id=$2", user_id, promo["id"])
     if used:
@@ -2373,11 +1915,11 @@ async def activate_promo_exec(message: types.Message, state: FSMContext):
     await use_promocode(user_id, promo["id"])
     await set_subscription(user_id, promo["days"])
     remaining = promo["max_uses"] - promo["uses"] - 1
-    await message.answer(f"✅ Промокод активирован! Получено {promo['days']} дней подписки.\nОсталось использований: {remaining}")
-    await bot.send_message(ADMIN_ID, f"🎫 Пользователь {user_id} активировал промокод {code}. Осталось использований: {remaining}")
+    await message.answer(f"✅ Активирован! +{promo['days']} дней подписки. Осталось использований: {remaining}")
+    await bot.send_message(ADMIN_ID, f"🎫 {user_id} активировал {code}")
     await state.clear()
 
-# ---- Пагинация пользователей ----
+# --- Пагинация пользователей ---
 @dp.callback_query(F.data == "admin_users_page")
 async def admin_users_page(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
@@ -2389,34 +1931,30 @@ async def show_users_page(message: types.Message, state: FSMContext):
     page = data.get("page", 0)
     users = await get_all_users()
     per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page if users else 1
-    if page >= total_pages:
-        page = total_pages - 1
-        await state.update_data(page=page)
-    if page < 0:
-        page = 0
-        await state.update_data(page=page)
+    total = max(1, (len(users) + per_page - 1) // per_page)
+    if page >= total: page = total - 1
+    if page < 0: page = 0
+    await state.update_data(page=page)
     start = page * per_page
     end = start + per_page
-    current_users = users[start:end] if users else []
-    text = "👥 *Пользователи:*\n\n"
-    for u in current_users:
+    current = users[start:end]
+    text = "👥 Пользователи:\n\n"
+    for u in current:
         sub = datetime.fromtimestamp(u["sub_until"]).strftime('%d.%m.%Y') if u["sub_until"] else "Нет"
         text += f"🆔 {u['tg_id']} | {u['username']}\n💵 {u['balance']:.2f}$ | Подписка до: {sub}\n\n"
     kb = []
     if page > 0:
         kb.append(InlineKeyboardButton(text="◀️ Назад", callback_data="users_page_prev"))
-    if page < total_pages - 1:
+    if page < total - 1:
         kb.append(InlineKeyboardButton(text="Вперед ▶️", callback_data="users_page_next"))
     kb.append(InlineKeyboardButton(text="🔙 В админку", callback_data="admin_panel"))
     keyboard = InlineKeyboardMarkup(inline_keyboard=[kb])
-    await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await message.edit_text(text, reply_markup=keyboard)
 
 @dp.callback_query(F.data == "users_page_prev")
 async def users_page_prev(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    data = await state.get_data()
-    page = data.get("page", 0)
+    page = (await state.get_data()).get("page", 0)
     if page > 0:
         await state.update_data(page=page - 1)
         await show_users_page(callback.message, state)
@@ -2425,12 +1963,10 @@ async def users_page_prev(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "users_page_next")
 async def users_page_next(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    data = await state.get_data()
-    page = data.get("page", 0)
+    page = (await state.get_data()).get("page", 0)
     users = await get_all_users()
-    per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page if users else 1
-    if page < total_pages - 1:
+    total = max(1, (len(users) + 9) // 10)
+    if page < total - 1:
         await state.update_data(page=page + 1)
         await show_users_page(callback.message, state)
     await callback.answer()
@@ -2440,15 +1976,15 @@ async def admin_users_list(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
     users = await get_all_users()
     if not users:
-        await callback.message.edit_text("Пользователей нет", reply_markup=back_button("admin_panel"))
+        await callback.message.edit_text("Нет пользователей", reply_markup=back_button("admin_panel"))
         return
     await admin_users_page(callback, state)
 
-# ---- Глобальная рассылка админа (только текст) ----
+# --- Глобальная рассылка админа ---
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await callback.message.answer("📢 Пришлите текст рассылки (без фото):")
+    await callback.message.answer("Введите текст рассылки:")
     await state.set_state(AdminBroadcast.waiting_text)
     await callback.answer()
 
@@ -2456,14 +1992,14 @@ async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext
 async def admin_broadcast_text(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     await state.update_data(text=message.text)
-    await message.answer("Подтвердите рассылку? (да/нет)")
+    await message.answer("Подтвердите (да/нет):")
     await state.set_state(AdminBroadcast.waiting_confirm)
 
 @dp.message(AdminBroadcast.waiting_confirm)
 async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     if message.text.lower() != "да":
-        await message.answer("Рассылка отменена")
+        await message.answer("Отменено")
         await state.clear()
         return
     data = await state.get_data()
@@ -2479,7 +2015,7 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
         except:
             pass
         await asyncio.sleep(0.5)
-    await message.answer(f"✅ Рассылка завершена. Отправлено {sent} из {total}")
+    await message.answer(f"✅ Отправлено {sent} из {total}")
     await state.clear()
 
 # ========== ЗАПУСК ==========
