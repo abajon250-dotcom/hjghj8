@@ -28,7 +28,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-CHANNEL_USERNAME = os.getenv("hlspam", "")
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("BOT_TOKEN, API_ID, API_HASH must be set in environment variables")
@@ -456,31 +455,6 @@ user_game_data = {}
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛ ==========
-async def is_subscribed_to_channel(user_id: int) -> bool:
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
-        return member.status in ["member", "creator", "administrator"]
-    except:
-        return False
-
-# Мидлварь для всех callback, кроме check_sub
-@dp.callback_query(lambda c: c.data not in ["check_sub"])
-async def subscription_middleware(callback: types.CallbackQuery):
-    if not await is_subscribed_to_channel(callback.from_user.id):
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
-        ])
-        await callback.message.answer(
-            f"❌ Для использования бота подпишитесь на канал @{CHANNEL_USERNAME}",
-            reply_markup=keyboard
-        )
-        await callback.answer()
-        return
-
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
 async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
@@ -625,14 +599,8 @@ async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
         return
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
-    if not await is_subscribed_to_channel(message.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")]
-        ])
-        await message.answer(f"Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
-        return
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
+
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -1016,7 +984,6 @@ async def start_cmd(message: types.Message):
     create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
     await message.answer("🎲 Добро пожаловать!\nИспользуйте кнопки меню.", reply_markup=main_menu(message.from_user.id))
 
-
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -1050,17 +1017,6 @@ async def my_accounts(callback: types.CallbackQuery):
         return
     await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
     await callback.answer()
-
-    @dp.callback_query(F.data == "check_sub")
-    async def check_sub(callback: types.CallbackQuery):
-        if await is_subscribed_to_channel(callback.from_user.id):
-            await callback.message.delete()
-            # После успешной проверки можно показать главное меню или просто удалить сообщение
-            await start_cmd(callback.message)  # или отправить приветствие
-        else:
-            await callback.answer(
-                "❌ Вы не подписаны на канал. Нажмите кнопку 'Подписаться' и затем 'Проверить подписку'.",
-                show_alert=True)
 
 @dp.callback_query(F.data == "connect_new_account")
 async def connect_new(callback: types.CallbackQuery):
