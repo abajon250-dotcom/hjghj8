@@ -1405,6 +1405,7 @@ async def tg_send_text(message: types.Message, state: FSMContext):
         await state.clear()
 
 # Отправка фото (аналогично, с обработкой ошибок)
+# Отправка фото (без обязательного текста)
 @dp.callback_query(F.data.startswith("tg_send_photo_"))
 async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.message.chat.type != ChatType.PRIVATE:
@@ -1412,32 +1413,29 @@ async def tg_send_photo_start(callback: types.CallbackQuery, state: FSMContext):
         return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username получателя (например, @username или 123456789):")
+    await callback.message.answer("Введите ID или username получателя:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
-
 @dp.message(TGAction.waiting_target)
 async def tg_photo_target(message: types.Message, state: FSMContext):
-    target = message.text.strip()
-    # Очищаем ввод
-    if target.replace('-', '').isdigit():
-        target = target
+    raw = message.text.strip()
+    if raw.replace('-', '').isdigit():
+        target = raw
+    else:
+        target = raw
     await state.update_data(target=target)
-    await message.answer("Пришлите фото (просто отправьте изображение):")
+    await message.answer("Теперь пришлите фото (можно с подписью):")
     await state.set_state(TGAction.waiting_photo)
-
 
 @dp.message(TGAction.waiting_photo, F.photo)
 async def tg_send_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     acc_id = data["acc_id"]
     target = data["target"]
-
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-              (acc_id, message.from_user.id))
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
     row = c.fetchone()
     conn.close()
     if not row:
@@ -1445,31 +1443,27 @@ async def tg_send_photo(message: types.Message, state: FSMContext):
         await state.clear()
         return
     session_file, phone = row
-
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
-        # Проверяем, что сессия жива
         await client.get_me()
-        # Получаем entity получателя
         try:
             entity = await client.get_entity(target)
         except ValueError:
             if target.isdigit():
                 entity = await client.get_entity(int(target))
             else:
-                raise Exception(f"Не удалось найти пользователя {target}")
-        # Скачиваем фото и отправляем
+                raise Exception("Не удалось найти пользователя")
         photo = message.photo[-1]
         file = await message.bot.get_file(photo.file_id)
-        # Скачиваем в байты (не сохраняем на диск)
-        file_bytes = await message.bot.download_file(file.file_path)
-        # Отправляем через Telethon
-        await client.send_file(entity, file_bytes)
+        file_path = f"/tmp/{photo.file_id}.jpg"
+        await message.bot.download_file(file.file_path, file_path)
+        # Если есть подпись (caption), передаём её
+        caption = message.caption if message.caption else None
+        await client.send_file(entity, file_path, caption=caption)
         await message.answer(f"✅ Фото отправлено в {target}")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
-        await message.answer(f"❌ Аккаунт {phone} был удалён из-за слетевшей сессии.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
@@ -1484,31 +1478,29 @@ async def tg_send_doc_start(callback: types.CallbackQuery, state: FSMContext):
         return
     acc_id = int(callback.data.split("_")[3])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите ID или username получателя (например, @username или 123456789):")
+    await callback.message.answer("Введите ID или username получателя:")
     await state.set_state(TGAction.waiting_target)
     await callback.answer()
 
-
 @dp.message(TGAction.waiting_target)
 async def tg_doc_target(message: types.Message, state: FSMContext):
-    target = message.text.strip()
-    if target.replace('-', '').isdigit():
-        target = target
+    raw = message.text.strip()
+    if raw.replace('-', '').isdigit():
+        target = raw
+    else:
+        target = raw
     await state.update_data(target=target)
-    await message.answer("Пришлите документ (любой файл):")
+    await message.answer("Теперь пришлите документ (файл):")
     await state.set_state(TGAction.waiting_file)
-
 
 @dp.message(TGAction.waiting_file, F.document)
 async def tg_send_doc(message: types.Message, state: FSMContext):
     data = await state.get_data()
     acc_id = data["acc_id"]
     target = data["target"]
-
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?",
-              (acc_id, message.from_user.id))
+    c.execute("SELECT session_file, phone FROM tg_accounts WHERE id=? AND owner_tg_id=?", (acc_id, message.from_user.id))
     row = c.fetchone()
     conn.close()
     if not row:
@@ -1516,7 +1508,6 @@ async def tg_send_doc(message: types.Message, state: FSMContext):
         await state.clear()
         return
     session_file, phone = row
-
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
@@ -1527,20 +1518,25 @@ async def tg_send_doc(message: types.Message, state: FSMContext):
             if target.isdigit():
                 entity = await client.get_entity(int(target))
             else:
-                raise Exception(f"Не удалось найти пользователя {target}")
+                raise Exception("Не удалось найти пользователя")
         doc = message.document
         file = await message.bot.get_file(doc.file_id)
-        file_bytes = await message.bot.download_file(file.file_path)
-        await client.send_file(entity, file_bytes)
+        file_path = f"/tmp/{doc.file_id}"
+        await message.bot.download_file(file.file_path, file_path)
+        # Подпись (caption) для документа
+        caption = message.caption if message.caption else None
+        await client.send_file(entity, file_path, caption=caption)
         await message.answer(f"✅ Документ отправлен в {target}")
     except (AuthKeyError, UnauthorizedError):
         await handle_session_error(message.from_user.id, acc_id, phone)
-        await message.answer(f"❌ Аккаунт {phone} был удалён из-за слетевшей сессии.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
+
+
+
 
 # Отложенная отправка
 @dp.callback_query(F.data.startswith("tg_schedule_"))
