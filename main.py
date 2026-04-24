@@ -48,7 +48,7 @@ TARIFFS = {
 
 db_pool = None
 
-# Глобальный словарь для игр (обход FSM)
+# Глобальный словарь для игр (обход FSM) – ОБЯЗАТЕЛЬНО
 user_games = {}
 
 async def init_db():
@@ -421,9 +421,7 @@ class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State
 class ActivatePromo(StatesGroup): waiting_code = State()
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-
-# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
+dp = Dispatcher(storage=MemoryStorage())# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
@@ -499,6 +497,8 @@ async def tg_account_actions(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="💬 Вступить в группу/канал", callback_data=f"tg_join_{acc_id}")],
         [InlineKeyboardButton(text="🚪 Выйти из чата", callback_data=f"tg_leave_{acc_id}")],
         [InlineKeyboardButton(text="✏️ Отправить сообщение", callback_data=f"tg_send_msg_{acc_id}")],
+        [InlineKeyboardButton(text="🖼️ Отправить фото", callback_data=f"tg_send_photo_{acc_id}")],
+        [InlineKeyboardButton(text="📄 Отправить документ", callback_data=f"tg_send_doc_{acc_id}")],
         [InlineKeyboardButton(text="⏰ Отложенная отправка", callback_data=f"tg_schedule_{acc_id}")],
         [InlineKeyboardButton(text="📋 Список диалогов", callback_data=f"tg_dialogs_{acc_id}")],
         [InlineKeyboardButton(text="🔐 Завершить все сессии", callback_data=f"tg_terminate_{acc_id}")],
@@ -720,7 +720,7 @@ async def tg_change_username(message: types.Message, state: FSMContext):
         await client.disconnect()
         await state.clear()
 
-# ========== ОТПРАВКА СООБЩЕНИЙ (включая фото и документы) ==========
+# ========== ОТПРАВКА СООБЩЕНИЙ, ФОТО, ДОКУМЕНТОВ, ОТЛОЖЕННАЯ ОТПРАВКА ==========
 @dp.callback_query(F.data.startswith("tg_send_msg_"))
 async def tg_send_msg_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[3])
@@ -1100,7 +1100,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     except:
         await message.answer("Введите число")
 
-# ========== VK АККАУНТЫ (дополнительные хендлеры) ==========
+# ========== VK АККАУНТЫ ==========
 @dp.callback_query(F.data == "list_vk_accounts")
 async def list_vk_accounts(callback: types.CallbackQuery):
     accounts = await get_user_vk_accounts(callback.from_user.id)
