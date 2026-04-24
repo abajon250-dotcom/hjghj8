@@ -1497,6 +1497,7 @@ async def game_cube_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("cube_"))
 async def game_cube_start(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
+    # Сохраняем режим в глобальном словаре (если его нет – создайте в начале файла)
     user_games[user_id] = {"type": "cube", "mode": callback.data, "bet": None}
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
@@ -1523,7 +1524,8 @@ async def game_bet(message: types.Message, state: FSMContext):
         game_type = user_games[user_id]["type"]
         mode = user_games[user_id]["mode"]
 
-        if game_type == "cube":
+        if user_id in user_games and user_games[user_id].get("type") == "cube":
+            mode = user_games[user_id]["mode"]
             if mode in ("cube_less_more", "cube_even_odd", "cube_35"):
                 if mode == "cube_less_more":
                     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_choice:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_choice:more")]])
@@ -1562,40 +1564,40 @@ async def game_bet(message: types.Message, state: FSMContext):
         await state.clear()
 
 # --- Кубик: выбор в режимах (less/more, even/odd, 3.5) ---
-@dp.callback_query(GameCube.waiting_choice)
-async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    if user_id not in user_games or user_games[user_id].get("bet") is None:
-        await callback.answer("Ошибка, начните сначала", show_alert=True)
-        return
-    bet = user_games[user_id]["bet"]
-    mode = user_games[user_id]["mode"]
-    choice = callback.data.split(":")[1]
-    msg = await callback.message.answer_dice(emoji="🎲")
-    roll = msg.dice.value
-    await asyncio.sleep(1)
-    win = False
-    if mode == "cube_less_more":
-        win = (choice == "less" and roll <= 3) or (choice == "more" and roll >= 4)
-    elif mode == "cube_even_odd":
-        win = (choice == "even" and roll % 2 == 0) or (choice == "odd" and roll % 2 == 1)
-    elif mode == "cube_35":
-        win = (choice == "gt35" and roll > 3.5) or (choice == "lt35" and roll < 3.5)
-    if win:
-        payout = bet * 2
-        await update_balance(user_id, payout)
-        new_balance = await get_balance(user_id)
-        result = f"🎲 Выпало {roll}\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-    else:
-        await update_balance(user_id, -bet)
-        new_balance = await get_balance(user_id)
-        result = f"🎲 Выпало {roll}\n❌ ПРОИГРЫШ: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    await callback.message.answer(result, reply_markup=after_game_menu())
-    # Сохраняем последнюю игру для кнопок +1, -1, ва-банк, ещё раз
-    user_games[user_id]["last_bet"] = bet
-    user_games[user_id]["last_mode"] = mode
-    user_games[user_id]["last_game_type"] = "cube"
-    await callback.answer()
+    @dp.callback_query(GameCube.waiting_choice)
+    async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
+        user_id = callback.from_user.id
+        if user_id not in user_games or user_games[user_id].get("bet") is None:
+            await callback.answer("Ошибка, начните сначала", show_alert=True)
+            return
+        bet = user_games[user_id]["bet"]
+        mode = user_games[user_id]["mode"]
+        choice = callback.data.split(":")[1]  # будет "less", "more", "even" и т.д.
+        msg = await callback.message.answer_dice(emoji="🎲")
+        roll = msg.dice.value
+        await asyncio.sleep(1)
+        win = False
+        if mode == "cube_less_more":
+            win = (choice == "less" and roll <= 3) or (choice == "more" and roll >= 4)
+        elif mode == "cube_even_odd":
+            win = (choice == "even" and roll % 2 == 0) or (choice == "odd" and roll % 2 == 1)
+        elif mode == "cube_35":
+            win = (choice == "gt35" and roll > 3.5) or (choice == "lt35" and roll < 3.5)
+        if win:
+            payout = bet * 2
+            await update_balance(user_id, payout)
+            new_balance = await get_balance(user_id)
+            result = f"🎲 Выпало {roll}\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
+        else:
+            await update_balance(user_id, -bet)
+            new_balance = await get_balance(user_id)
+            result = f"🎲 Выпало {roll}\n❌ ПРОИГРЫШ: {bet}$\n💰 Баланс: {new_balance:.2f}$"
+        # Сохраняем последнюю игру для кнопок +1/-1/ва-банк
+        user_games[user_id]["last_bet"] = bet
+        user_games[user_id]["last_mode"] = mode
+        await callback.message.answer(result, reply_markup=after_game_menu())
+        await state.clear()
+        await callback.answer()
     await state.clear()
 
 # --- Кубик: угадать число ---
