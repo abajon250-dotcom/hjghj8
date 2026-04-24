@@ -1412,8 +1412,8 @@ async def game_cube_menu(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cube_"))
 async def game_cube_start(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await state.update_data(cube_mode=callback.data)
+    await state.clear()  # чистим от прошлых игр
+    await state.update_data(cube_mode=callback.data)  # обязательно
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1429,10 +1429,19 @@ async def game_bet(message: types.Message, state: FSMContext):
         if bet > balance:
             await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}$")
             return
-        await state.update_data(bet=bet)
+
+        # --- Здесь принудительно получаем сохранённый режим ---
         data = await state.get_data()
-        if "cube_mode" in data:
-            mode = data["cube_mode"]
+        mode = data.get("cube_mode") or data.get("basketball_mode") or data.get("darts_mode") or data.get("football_mode")
+        if not mode:
+            await message.answer("❌ Не выбран режим игры. Начните заново из меню.")
+            await state.clear()
+            return
+
+        await state.update_data(bet=bet)
+
+        # Распознаём тип игры по префиксу
+        if mode.startswith("cube_"):
             if mode in ("cube_less_more", "cube_even_odd", "cube_35"):
                 if mode == "cube_less_more":
                     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_more")]])
@@ -1442,29 +1451,44 @@ async def game_bet(message: types.Message, state: FSMContext):
                     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_lt35")]])
                 await message.answer("Выберите вариант:", reply_markup=kb)
                 await state.set_state(GameCube.waiting_choice)
+                return
             elif mode == "cube_exact":
                 await message.answer("Введите число от 1 до 6:")
                 await state.set_state(GameCube.waiting_exact)
+                return
             elif mode == "cube_range":
                 await message.answer("Введите диапазон (например, 2-4):")
                 await state.set_state(GameCube.waiting_range)
+                return
             else:
-                await message.answer("❌ Неизвестный режим")
+                await message.answer("❌ Неизвестный режим куба")
                 await state.clear()
-        elif "basketball_mode" in data:
+                return
+
+        elif mode.startswith("basket_"):
             await state.set_state(GameBasketball.waiting_choice)
             await game_basketball_choice_after_bet(message, state)
-        elif "darts_mode" in data:
+            return
+
+        elif mode.startswith("darts_"):
             await state.set_state(GameDarts.waiting_choice)
             await game_darts_choice_after_bet(message, state)
-        elif "football_mode" in data:
+            return
+
+        elif mode.startswith("foot_"):
             await state.set_state(GameFootball.waiting_choice)
             await game_football_choice_after_bet(message, state)
+            return
+
         else:
-            await message.answer("❌ Ошибка: выберите игру заново")
+            await message.answer("❌ Неизвестный режим")
             await state.clear()
-    except:
+
+    except ValueError:
         await message.answer("❌ Введите число")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
+        await state.clear()
 
 # --- Кубик: варианты ---
 @dp.callback_query(GameCube.waiting_choice)
