@@ -48,7 +48,7 @@ TARIFFS = {
 
 db_pool = None
 
-# Глобальный словарь для игр (обход FSM) – ОБЯЗАТЕЛЬНО
+# Глобальный словарь для игр (обход FSM). Здесь будут храниться данные для куба, баскетбола и т.д.
 user_games = {}
 
 async def init_db():
@@ -307,11 +307,11 @@ def game_menu():
 
 def cube_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Больше/Меньше (x2)", callback_data="cube_less_more")],
-        [InlineKeyboardButton(text="Чёт/Нечет (x2)", callback_data="cube_even_odd")],
-        [InlineKeyboardButton(text="Угадать число (x6)", callback_data="cube_exact")],
-        [InlineKeyboardButton(text="Диапазон (x?)", callback_data="cube_range")],
-        [InlineKeyboardButton(text="Больше 3.5 / Меньше 3.5 (x2)", callback_data="cube_35")],
+        [InlineKeyboardButton(text="Больше/Меньше (x2)", callback_data="mode:less_more")],
+        [InlineKeyboardButton(text="Чёт/Нечет (x2)", callback_data="mode:even_odd")],
+        [InlineKeyboardButton(text="Угадать число (x6)", callback_data="mode:exact")],
+        [InlineKeyboardButton(text="Диапазон (x?)", callback_data="mode:range")],
+        [InlineKeyboardButton(text="Больше 3.5 / Меньше 3.5 (x2)", callback_data="mode:35")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
     ])
 
@@ -1468,21 +1468,21 @@ async def repeat_game(call_or_msg, state, new_bet=None):
         if not mode:
             await call_or_msg.answer("❌ Ошибка: режим куба не сохранён")
             return False
-        if mode in ('cube_less_more', 'cube_even_odd', 'cube_35'):
-            if mode == 'cube_less_more':
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_choice:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_choice:more")]])
-            elif mode == 'cube_even_odd':
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="cube_choice:even"), InlineKeyboardButton(text="Нечет", callback_data="cube_choice:odd")]])
+        if mode in ('less_more', 'even_odd', '35'):
+            if mode == 'less_more':
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data=f"choice:{mode}:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data=f"choice:{mode}:more")]])
+            elif mode == 'even_odd':
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data=f"choice:{mode}:even"), InlineKeyboardButton(text="Нечет", callback_data=f"choice:{mode}:odd")]])
             else:
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_choice:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_choice:lt35")]])
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data=f"choice:{mode}:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data=f"choice:{mode}:lt35")]])
             await call_or_msg.answer("Выберите вариант:", reply_markup=kb)
             await state.set_state(GameCube.waiting_choice)
             return True
-        elif mode == 'cube_exact':
+        elif mode == 'exact':
             await call_or_msg.answer("Введите число от 1 до 6:")
             await state.set_state(GameCube.waiting_exact)
             return True
-        elif mode == 'cube_range':
+        elif mode == 'range':
             await call_or_msg.answer("Введите диапазон (например, 2-4):")
             await state.set_state(GameCube.waiting_range)
             return True
@@ -1517,12 +1517,12 @@ async def game_cube_menu(callback: types.CallbackQuery):
     await callback.message.edit_text("🎲 Режимы куба:", reply_markup=cube_menu())
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("cube_"))
-async def game_cube_start(callback: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("mode:"))
+async def cube_mode_selected(callback: types.CallbackQuery):
+    mode = callback.data.split(":")[1]
     user_id = callback.from_user.id
-    user_games[user_id] = {"type": "cube", "mode": callback.data, "bet": None}
+    user_games[user_id] = {"type": "cube", "mode": mode, "bet": None}
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
-    await state.set_state(GameBet.waiting_bet)
     await callback.answer()
 
 # Общий обработчик ставки
@@ -1547,21 +1547,21 @@ async def game_bet(message: types.Message, state: FSMContext):
         mode = user_games[user_id]['mode']
 
         if game_type == 'cube':
-            if mode in ('cube_less_more', 'cube_even_odd', 'cube_35'):
-                if mode == 'cube_less_more':
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_choice:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_choice:more")]])
-                elif mode == 'cube_even_odd':
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="cube_choice:even"), InlineKeyboardButton(text="Нечет", callback_data="cube_choice:odd")]])
+            if mode in ('less_more', 'even_odd', '35'):
+                if mode == 'less_more':
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="choice:less_more:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="choice:less_more:more")]])
+                elif mode == 'even_odd':
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="choice:even_odd:even"), InlineKeyboardButton(text="Нечет", callback_data="choice:even_odd:odd")]])
                 else:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_choice:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_choice:lt35")]])
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="choice:35:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="choice:35:lt35")]])
                 await message.answer("Выберите вариант:", reply_markup=kb)
                 await state.set_state(GameCube.waiting_choice)
                 return
-            elif mode == 'cube_exact':
+            elif mode == 'exact':
                 await message.answer("Введите число от 1 до 6:")
                 await state.set_state(GameCube.waiting_exact)
                 return
-            elif mode == 'cube_range':
+            elif mode == 'range':
                 await message.answer("Введите диапазон (например, 2-4):")
                 await state.set_state(GameCube.waiting_range)
                 return
@@ -1582,7 +1582,7 @@ async def game_bet(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите число")
 
 # ---- Кубик: выбор в режимах (less/more, even/odd, 35) ----
-@dp.callback_query(F.data.startswith("cube_choice:"))
+@dp.callback_query(F.data.startswith("choice:"))
 async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     if user_id not in user_games or user_games[user_id].get('bet') is None:
@@ -1591,16 +1591,17 @@ async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
         return
     bet = user_games[user_id]['bet']
     mode = user_games[user_id]['mode']
-    choice = callback.data.split(':')[1]
+    choice_parts = callback.data.split(':')
+    choice = choice_parts[2] if len(choice_parts) > 2 else choice_parts[1]
     msg = await callback.message.answer_dice(emoji="🎲")
     roll = msg.dice.value
     await asyncio.sleep(1)
     win = False
-    if mode == 'cube_less_more':
+    if mode == 'less_more':
         win = (choice == 'less' and roll <= 3) or (choice == 'more' and roll >= 4)
-    elif mode == 'cube_even_odd':
+    elif mode == 'even_odd':
         win = (choice == 'even' and roll % 2 == 0) or (choice == 'odd' and roll % 2 == 1)
-    elif mode == 'cube_35':
+    elif mode == '35':
         win = (choice == 'gt35' and roll > 3.5) or (choice == 'lt35' and roll < 3.5)
     if win:
         payout = bet * 2
@@ -1645,7 +1646,7 @@ async def cube_exact_handler(message: types.Message, state: FSMContext):
             result = f"🎲 Выпало {roll}\n❌ НЕ УГАДАЛ. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
         user_games[user_id]['last_game_type'] = 'cube'
         user_games[user_id]['last_bet'] = bet
-        user_games[user_id]['last_cube_mode'] = 'cube_exact'
+        user_games[user_id]['last_cube_mode'] = 'exact'
         await message.answer(result, reply_markup=after_game_menu())
     except:
         await message.answer("❌ Введите число от 1 до 6")
@@ -1687,7 +1688,7 @@ async def cube_range_handler(message: types.Message, state: FSMContext):
             result = f"🎲 Выпало {roll}\n❌ МИМО. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
         user_games[user_id]['last_game_type'] = 'cube'
         user_games[user_id]['last_bet'] = bet
-        user_games[user_id]['last_cube_mode'] = 'cube_range'
+        user_games[user_id]['last_cube_mode'] = 'range'
         await message.answer(result, reply_markup=after_game_menu())
     except:
         await message.answer("❌ Пример: 2-4")
