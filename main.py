@@ -1481,6 +1481,11 @@ async def game_football_choice_after_bet(message, state, custom_bet=None):
         user_games[user_id]["last_game_type"] = "football"
     await state.clear()# Глобальный словарь для хранения данных игр (если не определён в части 1)
 # ========== ИГРА КУБ (КУБИК) ==========
+@dp.callback_query(F.data == "game_menu")
+async def game_menu_callback(callback: types.CallbackQuery):
+    await callback.message.edit_text("🎲 Выберите игру:", reply_markup=game_menu())
+    await callback.answer()
+
 @dp.callback_query(F.data == "game_cube")
 async def game_cube_menu(callback: types.CallbackQuery):
     await callback.message.edit_text("🎲 Режимы куба:", reply_markup=cube_menu())
