@@ -1518,11 +1518,12 @@ async def game_cube_menu(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("mode:"))
-async def cube_mode_selected(callback: types.CallbackQuery):
+async def cube_mode_selected(callback: types.CallbackQuery, state: FSMContext):
     mode = callback.data.split(":")[1]
     user_id = callback.from_user.id
     user_games[user_id] = {"type": "cube", "mode": mode, "bet": None}
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
+    await state.set_state(GameBet.waiting_bet)
     await callback.answer()
 
 # Общий обработчик ставки
