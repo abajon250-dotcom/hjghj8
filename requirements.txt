@@ -1,1 +1,5 @@
 aiogram==3.4.1
+telethon
+vk-api
+aiohttp
+asyncpg
