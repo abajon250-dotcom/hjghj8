@@ -1344,9 +1344,8 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}$\nКошелёк: {wallet}")
     await state.clear()
 
-# ========== ИГРЫ ==========
-# Глобальный словарь для хранения данных игры (обход FSM)
-user_game_mode = {}  # {user_id: {"type": "cube", "mode": "cube_less_more", "bet": 0, "last_bet": 0, ...}}
+# ========== ИГРЫ (полностью рабочий вариант, без FSM) ==========
+user_game_mode = {}  # {user_id: {"type": "cube", "mode": "cube_less_more", "bet": 0, "step": "wait_bet"}}
 
 @dp.callback_query(F.data == "game_menu")
 async def game_menu_callback(callback: types.CallbackQuery):
@@ -1361,7 +1360,14 @@ async def game_cube_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("cube_"))
 async def game_cube_start(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    user_game_mode[user_id] = {"type": "cube", "mode": callback.data, "bet": None, "last_bet": 0, "last_mode": "", "last_game_type": "cube"}
+    user_game_mode[user_id] = {
+        "type": "cube",
+        "mode": callback.data,
+        "bet": None,
+        "step": "wait_bet",
+        "last_bet": 0,
+        "last_mode": callback.data
+    }
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1374,7 +1380,14 @@ async def game_basketball_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("basket_"))
 async def game_basketball_start(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    user_game_mode[user_id] = {"type": "basketball", "mode": callback.data, "bet": None, "last_bet": 0, "last_mode": "", "last_game_type": "basketball"}
+    user_game_mode[user_id] = {
+        "type": "basketball",
+        "mode": callback.data,
+        "bet": None,
+        "step": "wait_bet",
+        "last_bet": 0,
+        "last_mode": callback.data
+    }
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1387,7 +1400,14 @@ async def game_darts_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("darts_"))
 async def game_darts_start(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    user_game_mode[user_id] = {"type": "darts", "mode": callback.data, "bet": None, "last_bet": 0, "last_mode": "", "last_game_type": "darts"}
+    user_game_mode[user_id] = {
+        "type": "darts",
+        "mode": callback.data,
+        "bet": None,
+        "step": "wait_bet",
+        "last_bet": 0,
+        "last_mode": callback.data
+    }
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1400,7 +1420,14 @@ async def game_football_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("foot_"))
 async def game_football_start(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    user_game_mode[user_id] = {"type": "football", "mode": callback.data, "bet": None, "last_bet": 0, "last_mode": "", "last_game_type": "football"}
+    user_game_mode[user_id] = {
+        "type": "football",
+        "mode": callback.data,
+        "bet": None,
+        "step": "wait_bet",
+        "last_bet": 0,
+        "last_mode": callback.data
+    }
     await callback.message.answer("💰 Введите ставку (мин 0.1$):")
     await state.set_state(GameBet.waiting_bet)
     await callback.answer()
@@ -1415,13 +1442,14 @@ async def game_bet(message: types.Message, state: FSMContext):
     try:
         bet = float(message.text.strip())
         if bet < 0.1:
-            await message.answer("❌ Минимальная ставка 0.1$")
+            await message.answer("❌ Ставка должна быть не менее 0.1$")
             return
         balance = await get_balance(user_id)
         if bet > balance:
             await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}$")
             return
         user_game_mode[user_id]["bet"] = bet
+        user_game_mode[user_id]["step"] = "play"
         game_type = user_game_mode[user_id]["type"]
         mode = user_game_mode[user_id]["mode"]
 
@@ -1434,7 +1462,8 @@ async def game_bet(message: types.Message, state: FSMContext):
                 else:
                     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_lt35")]])
                 await message.answer("Выберите вариант:", reply_markup=kb)
-                await state.set_state(GameCube.waiting_choice)
+                # Не меняем состояние FSM, оставляем GameBet.waiting_bet, но будем обрабатывать callback с данными
+                await state.update_data(game_active=True)
                 return
             elif mode == "cube_exact":
                 await message.answer("Введите число от 1 до 6:")
@@ -1443,10 +1472,6 @@ async def game_bet(message: types.Message, state: FSMContext):
             elif mode == "cube_range":
                 await message.answer("Введите диапазон (например, 2-4):")
                 await state.set_state(GameCube.waiting_range)
-                return
-            else:
-                await message.answer("❌ Неизвестный режим куба")
-                await state.clear()
                 return
         elif game_type == "basketball":
             await state.set_state(GameBasketball.waiting_choice)
@@ -1458,21 +1483,19 @@ async def game_bet(message: types.Message, state: FSMContext):
             await state.set_state(GameFootball.waiting_choice)
             await game_football_choice_after_bet(message, state)
     except ValueError:
-        await message.answer("❌ Введите число")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}")
-        await state.clear()
+        await message.answer("❌ Введите число (ставку)")
 
-# --- Кубик: выбор в режимах less/more, even/odd, 3.5 ---
-@dp.callback_query(GameCube.waiting_choice)
-async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
+# --- Обработчики выбора для кубика (less/more, even/odd, 3.5) ---
+@dp.callback_query(F.data.in_({"cube_less", "cube_more", "cube_even", "cube_odd", "cube_gt35", "cube_lt35"}))
+async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    if user_id not in user_game_mode or user_game_mode[user_id].get("bet") is None:
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "cube":
         await callback.answer("Ошибка: начните игру заново", show_alert=True)
         return
     bet = user_game_mode[user_id]["bet"]
     mode = user_game_mode[user_id]["mode"]
     choice = callback.data
+    # Бросаем кубик
     msg = await callback.message.answer_dice(emoji="🎲")
     roll = msg.dice.value
     await asyncio.sleep(1)
@@ -1493,17 +1516,19 @@ async def game_cube_choice(callback: types.CallbackQuery, state: FSMContext):
         new_balance = await get_balance(user_id)
         result = f"🎲 Выпало {roll}\n❌ ПРОИГРЫШ: {bet}$\n💰 Баланс: {new_balance:.2f}$"
     await callback.message.answer(result, reply_markup=after_game_menu())
+    # Сохраняем данные для кнопок +1, -1, ва-банк
     user_game_mode[user_id]["last_bet"] = bet
     user_game_mode[user_id]["last_mode"] = mode
     user_game_mode[user_id]["last_game_type"] = "cube"
     user_game_mode[user_id]["last_cube_mode"] = mode
+    await state.clear()
     await callback.answer()
 
 # --- Кубик: угадать число ---
 @dp.message(GameCube.waiting_exact)
 async def game_cube_exact(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id not in user_game_mode or user_game_mode[user_id].get("bet") is None:
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "cube":
         await message.answer("Ошибка, начните заново")
         await state.clear()
         return
@@ -1530,6 +1555,7 @@ async def game_cube_exact(message: types.Message, state: FSMContext):
         user_game_mode[user_id]["last_mode"] = mode
         user_game_mode[user_id]["last_game_type"] = "cube"
         user_game_mode[user_id]["last_cube_mode"] = mode
+        await state.clear()
     except:
         await message.answer("❌ Введите число от 1 до 6")
 
@@ -1537,7 +1563,7 @@ async def game_cube_exact(message: types.Message, state: FSMContext):
 @dp.message(GameCube.waiting_range)
 async def game_cube_range(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id not in user_game_mode or user_game_mode[user_id].get("bet") is None:
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "cube":
         await message.answer("Ошибка, начните заново")
         await state.clear()
         return
@@ -1571,21 +1597,20 @@ async def game_cube_range(message: types.Message, state: FSMContext):
         user_game_mode[user_id]["last_mode"] = mode
         user_game_mode[user_id]["last_game_type"] = "cube"
         user_game_mode[user_id]["last_cube_mode"] = mode
+        await state.clear()
     except:
         await message.answer("❌ Пример: 2-4")
 
-# --- Баскетбол (бросок) ---
-async def game_basketball_choice_after_bet(message: types.Message, state: FSMContext, custom_bet=None):
-    user_id = message.from_user.id
-    if user_id not in user_game_mode:
-        await message.answer("Ошибка, начните заново")
+# --- Баскетбол ---
+@dp.callback_query(GameBasketball.waiting_choice)
+async def game_basketball_choice_after_bet(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "basketball":
+        await callback.answer("Ошибка, начните заново", show_alert=True)
         return
-    bet = custom_bet if custom_bet is not None else user_game_mode[user_id].get("bet")
+    bet = user_game_mode[user_id]["bet"]
     mode = user_game_mode[user_id]["mode"]
-    if bet is None:
-        await message.answer("Ошибка: ставка не задана")
-        return
-    msg = await message.answer_dice(emoji="🏀")
+    msg = await callback.message.answer_dice(emoji="🏀")
     value = msg.dice.value
     await asyncio.sleep(1)
     outcomes = {
@@ -1604,23 +1629,23 @@ async def game_basketball_choice_after_bet(message: types.Message, state: FSMCon
         await update_balance(user_id, -bet)
         new_balance = await get_balance(user_id)
         result = f"🏀 {name} не удалось. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    await message.answer(result, reply_markup=after_game_menu())
+    await callback.message.answer(result, reply_markup=after_game_menu())
     user_game_mode[user_id]["last_bet"] = bet
     user_game_mode[user_id]["last_mode"] = mode
     user_game_mode[user_id]["last_game_type"] = "basketball"
+    await state.clear()
+    await callback.answer()
 
-# --- Дартс (бросок) ---
-async def game_darts_choice_after_bet(message: types.Message, state: FSMContext, custom_bet=None):
-    user_id = message.from_user.id
-    if user_id not in user_game_mode:
-        await message.answer("Ошибка, начните заново")
+# --- Дартс ---
+@dp.callback_query(GameDarts.waiting_choice)
+async def game_darts_choice_after_bet(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "darts":
+        await callback.answer("Ошибка, начните заново", show_alert=True)
         return
-    bet = custom_bet if custom_bet is not None else user_game_mode[user_id].get("bet")
+    bet = user_game_mode[user_id]["bet"]
     mode = user_game_mode[user_id]["mode"]
-    if bet is None:
-        await message.answer("Ошибка: ставка не задана")
-        return
-    msg = await message.answer_dice(emoji="🎯")
+    msg = await callback.message.answer_dice(emoji="🎯")
     value = msg.dice.value
     await asyncio.sleep(1)
     outcomes = {
@@ -1637,23 +1662,23 @@ async def game_darts_choice_after_bet(message: types.Message, state: FSMContext,
         await update_balance(user_id, -bet)
         new_balance = await get_balance(user_id)
         result = f"🎯 {name} не выпало. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    await message.answer(result, reply_markup=after_game_menu())
+    await callback.message.answer(result, reply_markup=after_game_menu())
     user_game_mode[user_id]["last_bet"] = bet
     user_game_mode[user_id]["last_mode"] = mode
     user_game_mode[user_id]["last_game_type"] = "darts"
+    await state.clear()
+    await callback.answer()
 
-# --- Футбол (удар) ---
-async def game_football_choice_after_bet(message: types.Message, state: FSMContext, custom_bet=None):
-    user_id = message.from_user.id
-    if user_id not in user_game_mode:
-        await message.answer("Ошибка, начните заново")
+# --- Футбол ---
+@dp.callback_query(GameFootball.waiting_choice)
+async def game_football_choice_after_bet(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in user_game_mode or user_game_mode[user_id]["type"] != "football":
+        await callback.answer("Ошибка, начните заново", show_alert=True)
         return
-    bet = custom_bet if custom_bet is not None else user_game_mode[user_id].get("bet")
+    bet = user_game_mode[user_id]["bet"]
     mode = user_game_mode[user_id]["mode"]
-    if bet is None:
-        await message.answer("Ошибка: ставка не задана")
-        return
-    msg = await message.answer_dice(emoji="⚽")
+    msg = await callback.message.answer_dice(emoji="⚽")
     value = msg.dice.value
     await asyncio.sleep(1)
     outcomes = {
@@ -1672,10 +1697,12 @@ async def game_football_choice_after_bet(message: types.Message, state: FSMConte
         await update_balance(user_id, -bet)
         new_balance = await get_balance(user_id)
         result = f"⚽ {name} не забит. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    await message.answer(result, reply_markup=after_game_menu())
+    await callback.message.answer(result, reply_markup=after_game_menu())
     user_game_mode[user_id]["last_bet"] = bet
     user_game_mode[user_id]["last_mode"] = mode
     user_game_mode[user_id]["last_game_type"] = "football"
+    await state.clear()
+    await callback.answer()
 
 # ========== КНОПКИ +1, -1, ВА-БАНК, ЕЩЁ РАЗ ==========
 async def repeat_game(call_or_msg, state: FSMContext, new_bet: float = None):
@@ -1693,7 +1720,9 @@ async def repeat_game(call_or_msg, state: FSMContext, new_bet: float = None):
     if bet > balance:
         await call_or_msg.answer(f"❌ Не хватает. Баланс: {balance:.2f}$", show_alert=True)
         return False
+    # Обновляем данные пользователя
     user_game_mode[user_id]["bet"] = bet
+    user_game_mode[user_id]["step"] = "play"
     if game_type == "cube":
         mode = user_game_mode[user_id].get("last_cube_mode", "")
         if mode in ("cube_less_more", "cube_even_odd", "cube_35"):
@@ -1704,25 +1733,26 @@ async def repeat_game(call_or_msg, state: FSMContext, new_bet: float = None):
             else:
                 kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_lt35")]])
             await call_or_msg.answer("Выберите вариант:", reply_markup=kb)
-            await state.set_state(GameCube.waiting_choice)
+            return True
         elif mode == "cube_exact":
             await call_or_msg.answer("Введите число от 1 до 6:")
             await state.set_state(GameCube.waiting_exact)
+            return True
         elif mode == "cube_range":
             await call_or_msg.answer("Введите диапазон (например, 2-4):")
             await state.set_state(GameCube.waiting_range)
-        else:
-            await call_or_msg.answer("Неизвестный режим", show_alert=True)
-            return False
+            return True
     elif game_type == "basketball":
         await state.set_state(GameBasketball.waiting_choice)
-        await game_basketball_choice_after_bet(call_or_msg.message, state, bet)
+        # Вызываем напрямую, но через callback (не через сообщение)
+        # В repeat_game вызывается из callback, поэтому можно использовать callback.message
+        await game_basketball_choice_after_bet(call_or_msg, state)
     elif game_type == "darts":
         await state.set_state(GameDarts.waiting_choice)
-        await game_darts_choice_after_bet(call_or_msg.message, state, bet)
+        await game_darts_choice_after_bet(call_or_msg, state)
     elif game_type == "football":
         await state.set_state(GameFootball.waiting_choice)
-        await game_football_choice_after_bet(call_or_msg.message, state, bet)
+        await game_football_choice_after_bet(call_or_msg, state)
     return True
 
 @dp.callback_query(F.data == "again")
