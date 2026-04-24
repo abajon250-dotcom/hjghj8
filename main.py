@@ -2337,13 +2337,12 @@ async def cube_allin(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cube_again")
 async def cube_again(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    data = await state.get_data()
-    last_bet = data.get("last_bet")
-    last_mode = data.get("last_mode")
-
-    if not last_bet or not last_mode:
+    game_data = user_last_game.get(user_id)
+    if not game_data:
         await callback.answer("Нет предыдущей игры. Начните новую через меню.", show_alert=True)
         return
+    last_bet = game_data["bet"]
+    last_mode = game_data["mode"]
 
     # Проверка баланса
     balance = await get_balance(user_id)
@@ -2351,10 +2350,9 @@ async def cube_again(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer(f"❌ Не хватает средств. Баланс: {balance:.2f}$", show_alert=True)
         return
 
-    # Сохраняем ставку в bet
+    # Сохраняем в состояние для текущей игры
     await state.update_data(bet=last_bet, cube_mode=last_mode)
 
-    # В зависимости от режима показываем следующий шаг
     if last_mode in ("less_more", "even_odd", "35"):
         if last_mode == "less_more":
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -2369,13 +2367,13 @@ async def cube_again(callback: types.CallbackQuery, state: FSMContext):
                 [InlineKeyboardButton(text="Больше 3.5", callback_data="cube_choice:gt35"),
                  InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_choice:lt35")]])
         await callback.message.answer("Выберите вариант:", reply_markup=kb)
-        await state.set_state(CubeBet.waiting_choice)
+        await state.set_state(GameCube.waiting_choice)
     elif last_mode == "exact":
         await callback.message.answer("Введите число от 1 до 6:")
-        await state.set_state(CubeBet.waiting_exact)
+        await state.set_state(GameCube.waiting_exact)
     elif last_mode == "range":
-        await callback.message.answer("Введите диапазон (например, 2-4):")
-        await state.set_state(CubeBet.waiting_range)
+        await callback.message.answer("Введите диапазон (пример: 2-4):")
+        await state.set_state(GameCube.waiting_range)
     await callback.answer()
 
 # ========== ЗАПУСК ==========
