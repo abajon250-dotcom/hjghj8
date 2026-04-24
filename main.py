@@ -421,7 +421,9 @@ class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State
 class ActivatePromo(StatesGroup): waiting_code = State()
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
+dp = Dispatcher(storage=MemoryStorage())
+
+user_last_game = {}
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
@@ -1618,6 +1620,7 @@ async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
     user_games[user_id]['last_cube_mode'] = mode
     await callback.message.answer(result, reply_markup=after_game_menu())
     await state.clear()
+    user_last_game[user_id] = {"bet": bet, "mode": mode}
     await callback.answer()
 
 # ---- Кубик: exact (угадать число) ----
@@ -1651,6 +1654,7 @@ async def cube_exact_handler(message: types.Message, state: FSMContext):
         await message.answer(result, reply_markup=after_game_menu())
     except:
         await message.answer("❌ Введите число от 1 до 6")
+        user_last_game[user_id] = {"bet": bet, "mode": "exact"}
     finally:
         await state.clear()
 
@@ -1693,6 +1697,7 @@ async def cube_range_handler(message: types.Message, state: FSMContext):
         await message.answer(result, reply_markup=after_game_menu())
     except:
         await message.answer("❌ Пример: 2-4")
+        user_last_game[user_id] = {"bet": bet, "mode": "range"}
     finally:
         await state.clear()
 
@@ -2262,35 +2267,43 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "cube_again")
 async def cube_again(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    data = await state.get_data()
-    last_bet = data.get("last_bet")
-    last_mode = data.get("last_mode")
-    if not last_bet or not last_mode:
-        await callback.answer("Нет предыдущей игры. Начните новую через меню.", show_alert=True)
+    last = user_last_game.get(user_id)
+    if not last:
+        await callback.answer("Нет предыдущей игры. Сначала сыграйте.", show_alert=True)
         return
-    # Проверяем баланс
+    last_bet = last["bet"]
+    last_mode = last["mode"]
+
     balance = await get_balance(user_id)
     if last_bet > balance:
-        await callback.answer(f"❌ Не хватает средств. Баланс: {balance:.2f}$", show_alert=True)
+        await callback.answer(f"❌ Не хватает. Баланс: {balance:.2f}$", show_alert=True)
         return
-    # Сохраняем ставку и режим
+
+    # Сбрасываем состояние для новой игры
+    await state.clear()
     await state.update_data(bet=last_bet, cube_mode=last_mode)
-    # В зависимости от режима показываем соответствующий интерфейс
+
     if last_mode in ("less_more", "even_odd", "35"):
         if last_mode == "less_more":
-            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_choice:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_choice:more")]])
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меньше (1-3)", callback_data="cube_choice:less"),
+                 InlineKeyboardButton(text="Больше (4-6)", callback_data="cube_choice:more")]])
         elif last_mode == "even_odd":
-            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="cube_choice:even"), InlineKeyboardButton(text="Нечет", callback_data="cube_choice:odd")]])
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Чёт", callback_data="cube_choice:even"),
+                 InlineKeyboardButton(text="Нечет", callback_data="cube_choice:odd")]])
         else:
-            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="cube_choice:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_choice:lt35")]])
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Больше 3.5", callback_data="cube_choice:gt35"),
+                 InlineKeyboardButton(text="Меньше 3.5", callback_data="cube_choice:lt35")]])
         await callback.message.answer("Выберите вариант:", reply_markup=kb)
-        await state.set_state(CubeBet.waiting_choice)
+        await state.set_state(GameCube.waiting_choice)
     elif last_mode == "exact":
         await callback.message.answer("Введите число от 1 до 6:")
-        await state.set_state(CubeBet.waiting_exact)
+        await state.set_state(GameCube.waiting_exact)
     elif last_mode == "range":
         await callback.message.answer("Введите диапазон (пример: 2-4):")
-        await state.set_state(CubeBet.waiting_range)
+        await state.set_state(GameCube.waiting_range)
     await callback.answer()
 
 @dp.callback_query(F.data == "cube_inc")
