@@ -406,7 +406,10 @@ class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State
 class ActivatePromo(StatesGroup): waiting_code = State()
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
+dp = Dispatcher(storage=MemoryStorage())#
+
+user_games = {}
+# ========== ОСНОВНЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
