@@ -395,15 +395,15 @@ async def vk_accounts_list(user_id: int):
 
 def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"), InlineKeyboardButton(text="👥 Пользователи >", callback_data="admin_users_page")],
-        [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"), InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton(text="📊 Расширенная статистика", callback_data="admin_ext_stats")],
+        [InlineKeyboardButton(text="💰 Управление балансом", callback_data="admin_balance_manage")],
         [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
         [InlineKeyboardButton(text="📢 Глобал рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="🎫 Промокоды", callback_data="admin_promocodes")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="💰 Заявки на вывод", callback_data="admin_withdraws")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-        [InlineKeyboardButton(text="📊 Статистика рассылок", callback_data="admin_broadcast_stats")]
+        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdraws")],
+        [InlineKeyboardButton(text="📥 Экспорт пользователей (CSV)", callback_data="admin_export_csv")],
+        InlineKeyboardButton(text="🔙 В главное меню", callback_data="main_menu")   # ← ОШИБКА: нет квадратных скобок!
     ])
 
 def after_game_menu():
