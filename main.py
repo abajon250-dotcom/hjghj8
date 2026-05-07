@@ -403,7 +403,7 @@ def admin_menu():
         [InlineKeyboardButton(text="🎫 Промокоды", callback_data="admin_promocodes")],
         [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdraws")],
         [InlineKeyboardButton(text="📥 Экспорт пользователей (CSV)", callback_data="admin_export_csv")],
-        InlineKeyboardButton(text="🔙 В главное меню", callback_data="main_menu")   # ← ОШИБКА: нет квадратных скобок!
+        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="main_menu")]
     ])
 
 def after_game_menu():
