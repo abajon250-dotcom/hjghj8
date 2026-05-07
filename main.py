@@ -3340,6 +3340,72 @@ async def admin_broadcast_stats(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
+async def check_vk_account_valid(owner_tg_id: int, acc_id: int, token: str, vk_name: str) -> bool:
+    """Проверяет, жив ли VK аккаунт. Если нет — удаляет из БД и уведомляет."""
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        vk.users.get()  # пробуем получить свои данные
+        return True
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "invalid token" in error_msg or "access denied" in error_msg or "authorization failed" in error_msg:
+            # Удаляем аккаунт из БД
+            await delete_vk_account(owner_tg_id, acc_id)
+            # Отправляем уведомление пользователю
+            await bot.send_message(owner_tg_id,
+                f"⚠️ **VK аккаунт «{vk_name}» автоматически удалён**\n"
+                f"Причина: токен недействителен или аккаунт заблокирован.\n"
+                f"Вы можете добавить его заново в разделе «Мои аккаунты».")
+            return False
+        else:
+            # Другая ошибка (сеть, таймаут) — не удаляем, но сообщаем
+            await bot.send_message(owner_tg_id,
+                f"❌ Ошибка при проверке VK аккаунта «{vk_name}»:\n{get_russian_error(e)}")
+            return False
+
+async def check_tg_account_valid(owner_tg_id: int, acc_id: int, session_file: str, phone: str) -> bool:
+    """Проверяет, жива ли сессия Telegram. Если нет — деактивирует аккаунт."""
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.connect()
+    try:
+        await client.get_me()
+        return True
+    except (AuthKeyError, UnauthorizedError) as e:
+        await deactivate_tg_account(owner_tg_id, acc_id)
+        await bot.send_message(owner_tg_id,
+            f"⚠️ **Telegram аккаунт {phone} автоматически деактивирован**\n"
+            f"Причина: сессия устарела или аккаунт заблокирован.\n"
+            f"Удалите его и добавьте заново в разделе «Мои аккаунты».")
+        return False
+    except Exception as e:
+        await bot.send_message(owner_tg_id,
+            f"❌ Ошибка при проверке Telegram аккаунта {phone}:\n{get_russian_error(e)}")
+        return False
+    finally:
+        await client.disconnect()
+
+async def periodic_account_check():
+    while True:
+        await asyncio.sleep(3600)  # каждый час
+        async with db_pool.acquire() as conn:
+            # Проверяем VK аккаунты
+            vk_rows = await conn.fetch("SELECT id, owner_tg_id, token, vk_name FROM vk_accounts WHERE is_active=True")
+            for row in vk_rows:
+                await check_vk_account_valid(row["owner_tg_id"], row["id"], row["token"], row["vk_name"])
+                await asyncio.sleep(1)  # задержка, чтобы не спамить
+            # Проверяем Telegram аккаунты
+            tg_rows = await conn.fetch("SELECT id, owner_tg_id, session_file, phone FROM tg_accounts WHERE is_active=True")
+            for row in tg_rows:
+                await check_tg_account_valid(row["owner_tg_id"], row["id"], row["session_file"], row["phone"])
+                await asyncio.sleep(1)
+
+# Запустить в main() после инициализации:
+async def main():
+    await init_db()
+    asyncio.create_task(periodic_account_check())  # фоновая проверка
+    await dp.start_polling(bot)
+    
 
 # ========== ЗАПУСК ==========
 async def main():
