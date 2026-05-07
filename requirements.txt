@@ -3,3 +3,4 @@ telethon
 vk-api
 aiohttp
 asyncpg
+python-dotenv
