@@ -121,6 +121,22 @@ async def init_db():
                 created_at BIGINT DEFAULT 0
             )
         ''')
+
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS broadcast_logs (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                account_type TEXT,
+                account_id INTEGER,
+                total_contacts INTEGER,
+                friends_count INTEGER,
+                chats_count INTEGER,
+                sent_count INTEGER,
+                start_time BIGINT,
+                end_time BIGINT,
+                status TEXT
+            )
+        ''')
         # Добавляем колонку registered_at, если её нет
         await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
@@ -3405,7 +3421,7 @@ async def main():
     await init_db()
     asyncio.create_task(periodic_account_check())  # фоновая проверка
     await dp.start_polling(bot)
-    
+
 
 # ========== ЗАПУСК ==========
 async def main():
