@@ -1066,28 +1066,16 @@ async def broadcast_tg_text(message: types.Message, state: FSMContext):
 
 @dp.message(BroadcastTG.waiting_delay)
 async def broadcast_tg_delay(message: types.Message, state: FSMContext):
-    """Получение задержки для рассылки Telegram"""
-    # Логируем для отладки (в консоль)
-    logging.info(f"Получено сообщение в waiting_delay: '{message.text}' (тип: {type(message.text)})")
-
-    raw_text = message.text.strip() if message.text else ""
-    if not raw_text:
-        await message.answer("❌ Вы ничего не отправили. Введите число секунд (например, 5).")
+    raw = message.text.strip()
+    if not raw:
+        await message.answer("❌ Введите задержку в секундах (число).")
         return
-
-    # Пытаемся извлечь число из строки (поддерживает "5", "5.5", "5,5" -> 5.5)
     try:
-        # Замена запятой на точку для поддержки дробных
-        cleaned = raw_text.replace(',', '.')
-        delay = float(cleaned)
-        if delay <= 0:
-            await message.answer("❌ Задержка должна быть больше 0 секунд.")
-            return
-        if delay < 2:
-            delay = 2  # минимальная задержка 2 сек (как у вас в коде)
+        delay = float(raw.replace(',', '.'))
+        if delay < 1:
+            delay = 1
     except ValueError:
-        await message.answer(
-            f"❌ Не удалось распознать число. Вы ввели: «{raw_text}».\nПожалуйста, введите число, например: 5")
+        await message.answer("❌ Нужно число, например 5")
         return
 
     data = await state.get_data()
@@ -1095,38 +1083,75 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     acc_id = data.get("acc_id")
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id,
-                                  message.from_user.id)
+        row = await conn.fetchrow("SELECT session_file FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ Аккаунт не найден. Возможно, он был удалён.")
+            await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
         session_file = row["session_file"]
 
-    # Уведомляем о начале
-    await message.answer(f"⏳ Начинаю рассылку с задержкой {delay} сек...")
+    status_msg = await message.answer("🚀 **Запуск рассылки...**\n📋 Получаю список диалогов...")
 
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
-        await client.get_me()
+        me = await client.get_me()
         dialogs = await client.get_dialogs()
         targets = [d for d in dialogs if d.is_user]
         total = len(targets)
-        sent = 0
+        if total == 0:
+            await status_msg.edit_text("❌ Нет диалогов для рассылки.")
+            return
 
+        sent = 0
+        start_time = time.time()
+        last_update = start_time
+
+        # Функция обновления сообщения
+        async def update_progress():
+            nonlocal sent, total, start_time
+            elapsed = time.time() - start_time
+            speed = sent / elapsed * 60 if elapsed > 0 else 0  # сообщений в минуту
+            remaining = (total - sent) / speed * 60 if speed > 0 else 0  # минут
+            percent = (sent / total) * 100
+
+            text_progress = (
+                f"📤 **Рассылка Telegram в процессе**\n\n"
+                f"👥 Всего: {total}\n"
+                f"✅ Отправлено: {sent}\n"
+                f"📭 Осталось: {total - sent}\n"
+                f"📊 Прогресс: {percent:.1f}%\n"
+                f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+                f"⏳ Осталось времени: {remaining:.1f} мин\n"
+                f"🕒 Задержка: {delay} сек"
+            )
+            await status_msg.edit_text(text_progress)
+
+        # Первый показ
+        await update_progress()
+
+        # Отправляем сообщения
         for dialog in targets:
             try:
                 await client.send_message(dialog.entity, text)
                 sent += 1
+                now = time.time()
+                if now - last_update >= 5:  # каждые 5 секунд
+                    await update_progress()
+                    last_update = now
                 await asyncio.sleep(delay)
             except Exception as e:
                 logging.warning(f"Ошибка отправки {dialog.entity}: {e}")
                 continue
 
-        await message.answer(f"✅ Рассылка завершена. Отправлено {sent} из {total} сообщений.")
+        # Финальное сообщение
+        await status_msg.edit_text(
+            f"✅ **Рассылка завершена!**\n"
+            f"📊 Отправлено: {sent} из {total}\n"
+            f"🎉 Спасибо за использование бота!"
+        )
     except Exception as e:
-        await message.answer(f"❌ Ошибка при рассылке: {get_russian_error(e)}")
+        await status_msg.edit_text(f"❌ **Ошибка:** {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
@@ -1189,21 +1214,16 @@ async def broadcast_vk_text(message: types.Message, state: FSMContext):
 
 @dp.message(BroadcastVK.waiting_delay)
 async def broadcast_vk_delay(message: types.Message, state: FSMContext):
-    logging.info(f"VK задержка: '{message.text}'")
-
-    raw_text = message.text.strip() if message.text else ""
-    if not raw_text:
-        await message.answer("❌ Введите число секунд (например, 5).")
+    raw = message.text.strip()
+    if not raw:
+        await message.answer("❌ Введите задержку в секундах (число).")
         return
-
     try:
-        cleaned = raw_text.replace(',', '.')
-        delay = float(cleaned)
-        if delay <= 0:
-            await message.answer("❌ Задержка должна быть больше 0.")
-            return
+        delay = float(raw.replace(',', '.'))
+        if delay < 1:
+            delay = 1
     except ValueError:
-        await message.answer(f"❌ Не удалось распознать число: «{raw_text}». Пример: 5")
+        await message.answer("❌ Нужно число, например 5")
         return
 
     data = await state.get_data()
@@ -1211,15 +1231,14 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     acc_id = data.get("acc_id")
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT token FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id,
-                                  message.from_user.id)
+        row = await conn.fetchrow("SELECT token FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ VK аккаунт не найден.")
+            await message.answer("❌ VK аккаунт не найден")
             await state.clear()
             return
         token = row["token"]
 
-    await message.answer(f"⏳ Начинаю VK-рассылку с задержкой {delay} сек...")
+    status_msg = await message.answer("🚀 **Запуск VK рассылки...**\n📋 Получаю список друзей и бесед...")
 
     try:
         vk_session = vk_api.VkApi(token=token)
@@ -1228,7 +1247,34 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         convs = vk.messages.getConversations(count=200)["items"]
         targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
         total = len(targets)
+        if total == 0:
+            await status_msg.edit_text("❌ Нет получателей (друзей или бесед).")
+            return
+
         sent = 0
+        start_time = time.time()
+        last_update = start_time
+
+        async def update_progress():
+            nonlocal sent, total, start_time
+            elapsed = time.time() - start_time
+            speed = sent / elapsed * 60 if elapsed > 0 else 0
+            remaining = (total - sent) / speed * 60 if speed > 0 else 0
+            percent = (sent / total) * 100
+            text_progress = (
+                f"📤 **VK рассылка в процессе**\n\n"
+                f"👥 Всего: {total}\n"
+                f"✅ Отправлено: {sent}\n"
+                f"📭 Осталось: {total - sent}\n"
+                f"📊 Прогресс: {percent:.1f}%\n"
+                f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+                f"⏳ Осталось времени: {remaining:.1f} мин\n"
+                f"🕒 Задержка: {delay} сек"
+            )
+            await status_msg.edit_text(text_progress)
+
+        await update_progress()
+
         for target in targets:
             try:
                 if isinstance(target, int):
@@ -1236,12 +1282,22 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
                 else:
                     vk.messages.send(peer_id=target, message=text, random_id=0)
                 sent += 1
+                now = time.time()
+                if now - last_update >= 5:
+                    await update_progress()
+                    last_update = now
                 await asyncio.sleep(delay)
             except Exception as e:
-                logging.warning(f"VK send error {target}: {e}")
-        await message.answer(f"✅ VK рассылка завершена. Отправлено {sent} из {total}")
+                logging.warning(f"VK ошибка {target}: {e}")
+                continue
+
+        await status_msg.edit_text(
+            f"✅ **VK рассылка завершена!**\n"
+            f"📊 Отправлено: {sent} из {total}\n"
+            f"🎉 Спасибо за использование бота!"
+        )
     except Exception as e:
-        await message.answer(f"❌ Ошибка VK: {get_russian_error(e)}")
+        await status_msg.edit_text(f"❌ **Ошибка VK:** {get_russian_error(e)}")
     finally:
         await state.clear()
 
