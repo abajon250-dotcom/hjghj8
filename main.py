@@ -433,7 +433,7 @@ class TGAction(StatesGroup): waiting_target = State(); waiting_message = State()
 class AdminCreatePromocode(StatesGroup): waiting_code = State(); waiting_days = State(); waiting_max_uses = State()
 class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State(); waiting_confirm = State()
 class ActivatePromo(StatesGroup): waiting_code = State()
-class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = State(); waiting_template_name = State(); waiting_template_content = State()
+class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = State(); waiting_template_name = State(); waiting_template_content = State(); waiting_new_lastname = State()
 class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); waiting_select = State()
 
 bot = Bot(token=BOT_TOKEN)
