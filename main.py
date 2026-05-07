@@ -55,6 +55,7 @@ async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), command_timeout=60)
     async with db_pool.acquire() as conn:
+        # существующие таблицы...
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 tg_id BIGINT PRIMARY KEY,
@@ -63,6 +64,8 @@ async def init_db():
                 balance REAL DEFAULT 0
             )
         ''')
+        # Добавляем колонку registered_at, если её ещё нет
+        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT DEFAULT 0')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tg_accounts (
                 id SERIAL PRIMARY KEY,
@@ -118,6 +121,8 @@ async def init_db():
                 created_at BIGINT DEFAULT 0
             )
         ''')
+        # Добавляем колонку registered_at, если её нет
+        await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
 
 # ----- Функции работы с пользователями -----
