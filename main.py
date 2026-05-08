@@ -490,6 +490,8 @@ class ActivatePromo(StatesGroup): waiting_code = State()
 class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = State(); waiting_template_name = State(); waiting_template_content = State(); waiting_new_lastname = State(); waiting_new_avatar = State()
 class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); waiting_select = State()
 class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
+class VKBroadcastState(StatesGroup): waiting_choice = State(); active = State()
+
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -1359,20 +1361,18 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             return
         token, vk_name = row["token"], row["vk_name"]
 
-    # Сохраняем данные в состояние
     await state.update_data(token=token, vk_name=vk_name, text=text, base_delay=base_delay, acc_id=acc_id)
 
-    # Кнопки выбора получателей
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Только друзья (надёжно)", callback_data="vk_target_friends")],
-        [InlineKeyboardButton(text="💬 Только беседы (риск ошибок)", callback_data="vk_target_chats")],
-        [InlineKeyboardButton(text="👥+💬 Все (много ошибок)", callback_data="vk_target_all")]
+        [InlineKeyboardButton(text="👥 Только друзья", callback_data="vk_target_friends")],
+        [InlineKeyboardButton(text="💬 Только беседы", callback_data="vk_target_chats")],
+        [InlineKeyboardButton(text="👥+💬 Все", callback_data="vk_target_all")]
     ])
     await message.answer("📌 **Кому отправляем?**", reply_markup=kb)
-    await state.set_state(BroadcastVKTarget.waiting_target_choice)
+    await state.set_state(VKBroadcastState.waiting_choice)
 
 
-@dp.callback_query(BroadcastVKTarget.waiting_target_choice, F.data.startswith("vk_target_"))
+@dp.callback_query(VKBroadcastState.waiting_choice, F.data.startswith("vk_target_"))
 async def vk_target_chosen(callback: types.CallbackQuery, state: FSMContext):
     target_type = callback.data.split("_")[2]  # friends, chats, all
     data = await state.get_data()
@@ -1382,11 +1382,10 @@ async def vk_target_chosen(callback: types.CallbackQuery, state: FSMContext):
     base_delay = data["base_delay"]
     acc_id = data["acc_id"]
 
-    await callback.message.answer("🚀 Получаю список получателей...")
+    await callback.message.answer("🚀 Получаю список...")
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
 
-    # Проверка токена
     try:
         vk.users.get()
     except Exception as e:
@@ -1394,10 +1393,10 @@ async def vk_target_chosen(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Сбор получателей
     targets = []
     friends_list = []
     chats_list = []
+
     if target_type in ("friends", "all"):
         try:
             friends_list = vk.friends.get()["items"]
@@ -1418,18 +1417,18 @@ async def vk_target_chosen(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Подтверждение и предпросмотр
     preview = f"📝 **Текст:**\n{text[:300]}{'...' if len(text)>300 else ''}\n\n👥 Друзей: {len(friends_list)}, Бесед: {len(chats_list)}\n✅ Начинаем?"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да", callback_data="vk_confirm_yes"), InlineKeyboardButton(text="❌ Нет", callback_data="main_menu")]
+        [InlineKeyboardButton(text="✅ Да", callback_data="vk_confirm_yes"),
+         InlineKeyboardButton(text="❌ Нет", callback_data="main_menu")]
     ])
     await state.update_data(targets=targets, total=total, sent=0, failed=0, start_time=time.time())
-    await state.set_state("vk_broadcasting")  # временное состояние
+    await state.set_state(VKBroadcastState.active)
     await callback.message.answer(preview, reply_markup=kb)
     await callback.answer()
 
 
-@dp.callback_query(F.data == "vk_confirm_yes", state="vk_broadcasting")
+@dp.callback_query(VKBroadcastState.active, F.data == "vk_confirm_yes")
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     token = data["token"]
@@ -1450,12 +1449,10 @@ async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     last_update = start_time
 
     for idx, target in enumerate(targets, 1):
-        # Проверка лимитов (если есть твоя функция check_and_update_limit)
-        # Если нет, просто делаем задержку
         delay = base_delay + random.uniform(0.5, 2)
 
         success = False
-        for attempt in range(2):  # одна повторная попытка
+        for attempt in range(2):
             try:
                 if isinstance(target, int):
                     vk.messages.send(user_id=target, message=text, random_id=0)
@@ -1464,7 +1461,7 @@ async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
                 success = True
                 break
             except Exception as e:
-                if "flood" in str(e).lower():
+                if "flood" in str(e).lower() or "too many" in str(e).lower():
                     await asyncio.sleep(delay + 3)
                 else:
                     break
@@ -1473,15 +1470,14 @@ async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
         else:
             failed += 1
 
-        # Прогресс каждые 5 секунд
         if time.time() - last_update >= 5 or idx == total:
-            percent = (idx / total) * 100
+            percent = (idx / total) * 100 if total else 0
             elapsed = time.time() - start_time
             await status_msg.edit_text(
                 f"📤 **Рассылка VK ({vk_name})**\n"
                 f"✅ Отправлено: {sent} / {total} ({percent:.1f}%)\n"
                 f"❌ Ошибок: {failed}\n"
-                f"⏱️ Времени прошло: {time.strftime('%M мин %S сек', time.gmtime(elapsed))}\n"
+                f"⏱️ Времени: {time.strftime('%M мин %S сек', time.gmtime(elapsed))}\n"
                 f"🕒 Следующая через {delay:.1f} сек"
             )
             last_update = time.time()
