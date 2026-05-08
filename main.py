@@ -23,6 +23,7 @@ from telethon.tl.functions.photos import UploadProfilePhotoRequest
 from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError
 import vk_api
 import aiohttp
+from aiogram.fsm.state import State, StatesGroup
 
 logging.basicConfig(level=logging.INFO)
 
@@ -488,6 +489,7 @@ class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_photo = State
 class ActivatePromo(StatesGroup): waiting_code = State()
 class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = State(); waiting_template_name = State(); waiting_template_content = State(); waiting_new_lastname = State(); waiting_new_avatar = State()
 class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); waiting_select = State()
+class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
