@@ -46,6 +46,25 @@ TARIFFS = {
     "month": {"days": 30, "price": 15, "name": "1 месяц"}
 }
 
+SAFETY_CONFIG = {
+    "vk": {
+        "min_delay": 2,          # минимальная задержка (сек)
+        "max_delay": 5,          # максимальная задержка (сек) - случайная
+        "messages_per_hour": 60, # не более 60 сообщений в час
+        "messages_per_day": 500, # не более 500 сообщений в день
+        "max_recipients": 200,   # максимум получателей за одну рассылку
+        "pause_after_batch": 300 # пауза 5 минут после каждых 50 сообщений
+    },
+    "tg": {
+        "min_delay": 3,
+        "max_delay": 7,
+        "messages_per_hour": 50,
+        "messages_per_day": 400,
+        "max_recipients": 150,
+        "pause_after_batch": 600
+    }
+}
+
 db_pool = None
 
 # Глобальный словарь для игр (обход FSM). Здесь будут храниться данные для куба, баскетбола и т.д.
@@ -135,6 +154,19 @@ async def init_db():
                 start_time BIGINT,
                 end_time BIGINT,
                 status TEXT
+            )
+        ''')
+
+        # В init_db() добавьте:
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS send_limits (
+                id SERIAL PRIMARY KEY,
+                account_type TEXT,
+                account_id INTEGER,
+                hour_start BIGINT,
+                hour_count INTEGER,
+                day_start BIGINT,
+                day_count INTEGER
             )
         ''')
         # Добавляем колонку registered_at, если её нет
@@ -1303,11 +1335,12 @@ async def broadcast_vk_text(message: types.Message, state: FSMContext):
 async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     if not raw:
-        await message.answer("❌ Введите задержку в секундах.")
+        await message.answer("❌ Введите базовую задержку (сек).")
         return
     try:
-        delay = float(raw.replace(',', '.'))
-        if delay < 1: delay = 1
+        base_delay = float(raw.replace(',', '.'))
+        if base_delay < 1:
+            base_delay = 1
     except ValueError:
         await message.answer("❌ Нужно число")
         return
@@ -1324,90 +1357,142 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             return
         token, vk_name = row["token"], row["vk_name"]
 
-    status_msg = await message.answer("🚀 Запуск VK рассылки...\n📋 Собираю друзей и беседы...")
+    # Сохраняем данные в состояние
+    await state.update_data(token=token, vk_name=vk_name, text=text, base_delay=base_delay, acc_id=acc_id)
 
+    # Кнопки выбора получателей
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Только друзья (надёжно)", callback_data="vk_target_friends")],
+        [InlineKeyboardButton(text="💬 Только беседы (риск ошибок)", callback_data="vk_target_chats")],
+        [InlineKeyboardButton(text="👥+💬 Все (много ошибок)", callback_data="vk_target_all")]
+    ])
+    await message.answer("📌 **Кому отправляем?**", reply_markup=kb)
+    await state.set_state(BroadcastVKTarget.waiting_target_choice)
+
+
+@dp.callback_query(BroadcastVKTarget.waiting_target_choice, F.data.startswith("vk_target_"))
+async def vk_target_chosen(callback: types.CallbackQuery, state: FSMContext):
+    target_type = callback.data.split("_")[2]  # friends, chats, all
+    data = await state.get_data()
+    token = data["token"]
+    vk_name = data["vk_name"]
+    text = data["text"]
+    base_delay = data["base_delay"]
+    acc_id = data["acc_id"]
+
+    await callback.message.answer("🚀 Получаю список получателей...")
+    vk_session = vk_api.VkApi(token=token)
+    vk = vk_session.get_api()
+
+    # Проверка токена
     try:
-        vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()
-        # Проверка токена
         vk.users.get()
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка токена: {e}")
+        await state.clear()
+        return
 
-        friends = vk.friends.get()["items"]
-        convs = vk.messages.getConversations(count=200)["items"]
-        friends_count = len(friends)
-        chats_count = len(convs)
-        targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
-        total = len(targets)
-        if total == 0:
-            await status_msg.edit_text("❌ Нет получателей (друзей или бесед).")
-            await log_broadcast(message.from_user.id, "vk", acc_id, 0, 0, 0, 0, "failed")
-            return
+    # Сбор получателей
+    targets = []
+    friends_list = []
+    chats_list = []
+    if target_type in ("friends", "all"):
+        try:
+            friends_list = vk.friends.get()["items"]
+            targets.extend(friends_list)
+        except:
+            pass
+    if target_type in ("chats", "all"):
+        try:
+            convs = vk.messages.getConversations(count=200)["items"]
+            chats_list = [c["conversation"]["peer"]["id"] for c in convs]
+            targets.extend(chats_list)
+        except:
+            pass
 
-        # Примерное время
-        estimated_seconds = total * delay
-        estimated_str = time.strftime("%H ч %M мин %S сек", time.gmtime(estimated_seconds))
+    total = len(targets)
+    if total == 0:
+        await callback.message.answer("❌ Нет получателей.")
+        await state.clear()
+        return
 
-        sent = 0
-        start_time = time.time()
-        last_update = start_time
+    # Подтверждение и предпросмотр
+    preview = f"📝 **Текст:**\n{text[:300]}{'...' if len(text)>300 else ''}\n\n👥 Друзей: {len(friends_list)}, Бесед: {len(chats_list)}\n✅ Начинаем?"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да", callback_data="vk_confirm_yes"), InlineKeyboardButton(text="❌ Нет", callback_data="main_menu")]
+    ])
+    await state.update_data(targets=targets, total=total, sent=0, failed=0, start_time=time.time())
+    await state.set_state("vk_broadcasting")  # временное состояние
+    await callback.message.answer(preview, reply_markup=kb)
+    await callback.answer()
 
-        async def update_progress():
-            nonlocal sent, total, start_time
-            elapsed = time.time() - start_time
-            speed = sent / elapsed * 60 if elapsed > 0 else 0
-            remaining_seconds = (total - sent) * delay if delay > 0 else 0
-            if speed > 0 and sent > 0:
-                remaining_seconds = (total - sent) / (speed / 60)
-            remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_seconds))
-            percent = (sent / total) * 100
-            await status_msg.edit_text(
-                f"📤 **VK рассылка**\n"
-                f"👥 Друзей: {friends_count} | 💬 Бесед: {chats_count}\n"
-                f"✅ Отправлено: {sent} / {total} ({percent:.1f}%)\n"
-                f"⏳ Осталось: {remaining_str}\n"
-                f"⚡ Скорость: {speed:.1f} сообщ/мин"
-            )
 
-        await status_msg.edit_text(
-            f"📊 **VK рассылка запущена**\n"
-            f"👥 Друзей: {friends_count}, Бесед: {chats_count}\n"
-            f"⏱️ Задержка: {delay} сек\n"
-            f"⏳ Примерное время: {estimated_str}"
-        )
+@dp.callback_query(F.data == "vk_confirm_yes", state="vk_broadcasting")
+async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    token = data["token"]
+    text = data["text"]
+    base_delay = data["base_delay"]
+    targets = data["targets"]
+    total = data["total"]
+    vk_name = data["vk_name"]
+    acc_id = data["acc_id"]
 
-        for target in targets:
+    vk_session = vk_api.VkApi(token=token)
+    vk = vk_session.get_api()
+    status_msg = await callback.message.answer("🚀 Запуск рассылки...")
+
+    sent = 0
+    failed = 0
+    start_time = time.time()
+    last_update = start_time
+
+    for idx, target in enumerate(targets, 1):
+        # Проверка лимитов (если есть твоя функция check_and_update_limit)
+        # Если нет, просто делаем задержку
+        delay = base_delay + random.uniform(0.5, 2)
+
+        success = False
+        for attempt in range(2):  # одна повторная попытка
             try:
                 if isinstance(target, int):
                     vk.messages.send(user_id=target, message=text, random_id=0)
                 else:
                     vk.messages.send(peer_id=target, message=text, random_id=0)
-                sent += 1
-                if time.time() - last_update >= 5:
-                    await update_progress()
-                    last_update = time.time()
-                await asyncio.sleep(delay)
+                success = True
+                break
             except Exception as e:
-                if "invalid token" in str(e).lower():
-                    await delete_vk_account(message.from_user.id, acc_id)
-                    await status_msg.edit_text(f"❌ Аккаунт {vk_name} заблокирован. Удалён.")
-                    await log_broadcast(message.from_user.id, "vk", acc_id, total, friends_count, chats_count, sent, "blocked")
-                    return
-                continue
+                if "flood" in str(e).lower():
+                    await asyncio.sleep(delay + 3)
+                else:
+                    break
+        if success:
+            sent += 1
+        else:
+            failed += 1
 
-        total_time = time.time() - start_time
-        total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
-        await status_msg.edit_text(
-            f"✅ **Рассылка VK завершена**\n"
-            f"📊 Отправлено: {sent} из {total}\n"
-            f"👥 Друзей: {friends_count}, Бесед: {chats_count}\n"
-            f"⏱️ Затрачено: {total_time_str}"
-        )
-        await log_broadcast(message.from_user.id, "vk", acc_id, total, friends_count, chats_count, sent, "completed")
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
-        await log_broadcast(message.from_user.id, "vk", acc_id, 0, 0, 0, 0, "error")
-    finally:
-        await state.clear()
+        # Прогресс каждые 5 секунд
+        if time.time() - last_update >= 5 or idx == total:
+            percent = (idx / total) * 100
+            elapsed = time.time() - start_time
+            await status_msg.edit_text(
+                f"📤 **Рассылка VK ({vk_name})**\n"
+                f"✅ Отправлено: {sent} / {total} ({percent:.1f}%)\n"
+                f"❌ Ошибок: {failed}\n"
+                f"⏱️ Времени прошло: {time.strftime('%M мин %S сек', time.gmtime(elapsed))}\n"
+                f"🕒 Следующая через {delay:.1f} сек"
+            )
+            last_update = time.time()
+        await asyncio.sleep(delay)
+
+    total_time = time.time() - start_time
+    await status_msg.edit_text(
+        f"✅ **Рассылка VK завершена**\n"
+        f"📊 Отправлено: {sent} из {total}\n"
+        f"❌ Не удалось: {failed}\n"
+        f"⏱️ Затрачено: {time.strftime('%H ч %M мин %S сек', time.gmtime(total_time))}"
+    )
+    await state.clear()
 
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
@@ -3422,6 +3507,39 @@ async def main():
     asyncio.create_task(periodic_account_check())  # фоновая проверка
     await dp.start_polling(bot)
 
+async def check_and_update_limit(account_type: str, account_id: int, limit_cfg: dict) -> bool:
+    """Проверяет, не превышен ли лимит. Если нет - увеличивает счётчик. Возвращает True, если можно отправлять."""
+    now = int(time.time())
+    hour_window = now - 3600
+    day_window = now - 86400
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT hour_start, hour_count, day_start, day_count FROM send_limits WHERE account_type=$1 AND account_id=$2",
+            account_type, account_id
+        )
+        if row:
+            hour_start, hour_count, day_start, day_count = row
+            if hour_start < hour_window:
+                hour_start = now
+                hour_count = 0
+            if day_start < day_window:
+                day_start = now
+                day_count = 0
+            if hour_count >= limit_cfg["messages_per_hour"]:
+                return False
+            if day_count >= limit_cfg["messages_per_day"]:
+                return False
+            # Обновляем
+            await conn.execute(
+                "UPDATE send_limits SET hour_start=$1, hour_count=$2, day_start=$3, day_count=$4 WHERE account_type=$5 AND account_id=$6",
+                hour_start, hour_count+1, day_start, day_count+1, account_type, account_id
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO send_limits (account_type, account_id, hour_start, hour_count, day_start, day_count) VALUES ($1,$2,$3,$4,$5,$6)",
+                account_type, account_id, now, 1, now, 1
+            )
+    return True
 
 # ========== ЗАПУСК ==========
 async def main():
