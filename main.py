@@ -355,8 +355,10 @@ async def is_subscribed_to_channel(user_id: int) -> bool:
 # ========== КЛАВИАТУРЫ ==========
 # ========== ПРЕМИУМ-КЛАВИАТУРЫ ==========
 
+# ========== ПРЕМИУМ-КЛАВИАТУРЫ ==========
+
 def main_menu(tg_id: int):
-    """Главное меню — стиль «золотой»"""
+    """Главное меню — золотой стиль"""
     kb = [
         [
             InlineKeyboardButton(text="🎲 ИГРАТЬ", callback_data="game_menu"),
@@ -372,7 +374,6 @@ def main_menu(tg_id: int):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def game_menu():
-    """Игровой зал с коэффициентами"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎲 КУБ   |  x2–x6", callback_data="game_cube")],
         [InlineKeyboardButton(text="🏀 БАСКЕТБОЛ | x1.5–x7", callback_data="game_basketball")],
@@ -399,7 +400,7 @@ def after_game_menu():
             InlineKeyboardButton(text="💸 -1$", callback_data="dec_bet"),
             InlineKeyboardButton(text="🔥 ВА-БАНК", callback_data="all_in")
         ],
-        [InlineKeyboardButton(text="🏠 В ГЛАВНОЕ МЕНЮ", callback_data="game_menu")]
+        [InlineKeyboardButton(text="🏠 В МЕНЮ", callback_data="game_menu")]
     ])
 
 def profile_kb():
@@ -415,10 +416,25 @@ def profile_kb():
         [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
     ])
 
+def my_accounts_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="list_tg_accounts")],
+        [InlineKeyboardButton(text="📘 VK", callback_data="list_vk_accounts")],
+        [InlineKeyboardButton(text="➕ ПОДКЛЮЧИТЬ НОВЫЙ", callback_data="connect_new_account")],
+        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
+    ])
+
+def connect_new_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="add_tg")],
+        [InlineKeyboardButton(text="📘 VK", callback_data="add_vk")],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")]
+    ])
+
 def admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users")],
-        [InlineKeyboardButton(text="📊 РАСШИРЕННАЯ СТАТИСТИКА", callback_data="admin_ext_stats")],
+        [InlineKeyboardButton(text="📊 СТАТИСТИКА", callback_data="admin_ext_stats")],
         [InlineKeyboardButton(text="💰 БАЛАНСЫ", callback_data="admin_balance_manage")],
         [InlineKeyboardButton(text="🎁 ВЫДАТЬ ПОДПИСКУ", callback_data="admin_give_sub")],
         [InlineKeyboardButton(text="📢 ГЛОБАЛ РАССЫЛКА", callback_data="admin_broadcast")],
@@ -3549,6 +3565,37 @@ async def check_and_update_limit(account_type: str, account_id: int, limit_cfg: 
                 account_type, account_id, now, 1, now, 1
             )
     return True
+@dp.callback_query(F.data == "help")
+async def help_menu(callback: types.CallbackQuery):
+    text = (
+        "❓ *ПОМОЩЬ И ИНСТРУКЦИЯ*\n\n"
+        "┌─────────────────────────────────┐\n"
+        "│  🎲 *ИГРЫ*                         │\n"
+        "│  Выбери игру, сделай ставку      │\n"
+        "│  от 0.1$. Коэффициенты до x10.   │\n"
+        "├─────────────────────────────────┤\n"
+        "│  💰 *БАЛАНС*                       │\n"
+        "│  Пополнение через CryptoBot      │\n"
+        "│  (USDT). Вывод от 1$ на кошелёк. │\n"
+        "├─────────────────────────────────┤\n"
+        "│  📢 *РАССЫЛКИ*                    │\n"
+        "│  Добавь свои Telegram/VK аккаунты,│\n"
+        "│  пиши сообщения, настраивай за-  │\n"
+        "│  держку. Подписка Platinum нужна │\n"
+        "│  для добавления аккаунтов.       │\n"
+        "├─────────────────────────────────┤\n"
+        "│  💎 *ПОДПИСКА*                    │\n"
+        "│  Даёт доступ к рассылкам, шабло- │\n"
+        "│  нам и расширенной статистике.   │\n"
+        "├─────────────────────────────────┤\n"
+        "│  🔧 *ТЕХПОДДЕРЖКА*                │\n"
+        "│  @bloodworn (замените на свой)   │\n"
+        "└─────────────────────────────────┘\n\n"
+        "▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰\n"
+        "✨ *Удачи в игре и высоких выигрышей!*"
+    )
+    await callback.message.edit_text(text, reply_markup=back_button("main_menu"), parse_mode="Markdown")
+    await callback.answer()
 
 # ========== ЗАПУСК ==========
 async def main():
