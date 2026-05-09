@@ -557,9 +557,11 @@ async def connect_new(callback: types.CallbackQuery):
 async def list_tg_accounts(callback: types.CallbackQuery):
     accounts = await get_user_tg_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text("Нет Telegram аккаунтов.", reply_markup=back_button("my_accounts"))
+        text = "📭 *У вас нет Telegram аккаунтов.*\nНажмите ➕ ДОБАВИТЬ TG, чтобы подключить."
+        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
         return
-    await callback.message.edit_text("Ваши аккаунты:", reply_markup=await tg_accounts_list(callback.from_user.id))
+    text = "📱 *ВАШИ TELEGRAM АККАУНТЫ*"
+    await callback.message.edit_text(text, reply_markup=await tg_accounts_list(callback.from_user.id), parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_acc_"))
@@ -1280,9 +1282,11 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
 async def list_vk_accounts(callback: types.CallbackQuery):
     accounts = await get_user_vk_accounts(callback.from_user.id)
     if not accounts:
-        await callback.message.edit_text("Нет VK аккаунтов.", reply_markup=back_button("my_accounts"))
+        text = "📭 *У вас нет VK аккаунтов.*\nНажмите ➕ ДОБАВИТЬ VK, чтобы подключить."
+        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
         return
-    await callback.message.edit_text("Ваши VK аккаунты:", reply_markup=await vk_accounts_list(callback.from_user.id))
+    text = "📘 *ВАШИ VK АККАУНТЫ*"
+    await callback.message.edit_text(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("vk_acc_"))
@@ -3595,6 +3599,28 @@ async def help_menu(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(text, reply_markup=back_button("main_menu"), parse_mode="Markdown")
     await callback.answer()
+
+async def tg_accounts_list(user_id: int):
+    """Возвращает клавиатуру со списком Telegram аккаунтов пользователя"""
+    accounts = await get_user_tg_accounts(user_id)
+    kb = []
+    for acc in accounts:
+        status = "✅" if acc["is_active"] else "❌"
+        kb.append([InlineKeyboardButton(text=f"{status} {acc['name']} ({acc['phone']})", callback_data=f"tg_acc_{acc['id']}")])
+    kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ TG", callback_data="add_tg")])
+    kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+async def vk_accounts_list(user_id: int):
+    """Возвращает клавиатуру со списком VK аккаунтов пользователя"""
+    accounts = await get_user_vk_accounts(user_id)
+    kb = []
+    for acc in accounts:
+        status = "✅" if acc["is_active"] else "❌"
+        kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
+    kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
+    kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 # ========== ЗАПУСК ==========
 async def main():
