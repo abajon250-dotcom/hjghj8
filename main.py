@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_ID", "").split(",") if x.strip()]
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 
@@ -195,7 +195,7 @@ async def create_user(tg_id: int, username: str):
         """, tg_id, username, int(time.time()))
 
 async def is_platinum_subscribed(tg_id: int):
-    if tg_id in ADMIN_IDS:
+    if tg_id == ADMIN_ID:
         return True
     user = await get_user(tg_id)
     return user and user["sub_until"] > int(time.time())
@@ -373,7 +373,7 @@ def main_menu(tg_id: int):
             InlineKeyboardButton(text="❓ ПОМОЩЬ", callback_data="help")
         ],
     ]
-    if tg_id in ADMIN_IDS:
+    if tg_id == ADMIN_ID:
         kb.append([InlineKeyboardButton(text="⚙️ АДМИН", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -2192,7 +2192,7 @@ async def all_in(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()# ========== АДМИН-ПАНЕЛЬ ==========
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
@@ -2201,7 +2201,7 @@ async def admin_panel_callback(callback: types.CallbackQuery):
 # --- Выдача подписки ---
 @dp.callback_query(F.data == "admin_give_sub")
 async def admin_give_sub_start(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id != ADMIN_ID: return
     await callback.message.answer("Введите ID пользователя:")
     await state.set_state(AdminGiveSubscription.waiting_user_id)
     await callback.answer()
@@ -2546,14 +2546,14 @@ async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext
 
 @dp.message(AdminBroadcast.waiting_text)
 async def admin_broadcast_text(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id != ADMIN_ID: return
     await state.update_data(text=message.text)
     await message.answer("Подтвердите (да/нет):")
     await state.set_state(AdminBroadcast.waiting_confirm)
 
 @dp.message(AdminBroadcast.waiting_confirm)
 async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id != ADMIN_ID: return
     if message.text.lower() != "да":
         await message.answer("Отменено")
         await state.clear()
@@ -2819,7 +2819,7 @@ async def admin_extended_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_top_balance")
 async def admin_top_balance(callback: types.CallbackQuery):
-    if message.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         return
     top = await get_top_users_by_balance(10)
     if not top:
@@ -2833,7 +2833,7 @@ async def admin_top_balance(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_top_sub")
 async def admin_top_subscription(callback: types.CallbackQuery):
-    if message.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         return
     top = await get_top_subscriptions(10)
     if not top:
@@ -2848,7 +2848,7 @@ async def admin_top_subscription(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_export_csv")
 async def admin_export_csv(callback: types.CallbackQuery):
-    if message.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         await callback.answer("Нет доступа", show_alert=True)
         return
     rows = await get_all_users_for_csv()
@@ -2872,7 +2872,7 @@ async def admin_export_csv(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_balance_manage")
 async def admin_balance_manage(callback: types.CallbackQuery):
-    if message.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"),
@@ -3417,7 +3417,7 @@ async def vk_template_text(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_broadcast_stats")
 async def admin_broadcast_stats(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
+    if callback.from_user.id != ADMIN_ID:
         await callback.answer("Нет доступа", show_alert=True)
         return
     async with db_pool.acquire() as conn:
