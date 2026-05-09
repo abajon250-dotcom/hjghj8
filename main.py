@@ -353,119 +353,86 @@ async def is_subscribed_to_channel(user_id: int) -> bool:
         return False
 
 # ========== КЛАВИАТУРЫ ==========
+# ========== ПРЕМИУМ-КЛАВИАТУРЫ ==========
+
 def main_menu(tg_id: int):
-    buttons = [
-        [InlineKeyboardButton(text="🎲 Играть", callback_data="game_menu")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="🔧 Мои аккаунты", callback_data="my_accounts")]
+    """Главное меню — стиль «золотой»"""
+    kb = [
+        [
+            InlineKeyboardButton(text="🎲 ИГРАТЬ", callback_data="game_menu"),
+            InlineKeyboardButton(text="👤 КАБИНЕТ", callback_data="profile")
+        ],
+        [
+            InlineKeyboardButton(text="🔧 АККАУНТЫ", callback_data="my_accounts"),
+            InlineKeyboardButton(text="❓ ПОМОЩЬ", callback_data="help")
+        ],
     ]
     if tg_id == ADMIN_ID:
-        buttons.append([InlineKeyboardButton(text="👑 Админ", callback_data="admin_panel")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+        kb.append([InlineKeyboardButton(text="⚙️ АДМИН", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 def game_menu():
+    """Игровой зал с коэффициентами"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Куб", callback_data="game_cube")],
-        [InlineKeyboardButton(text="🏀 Баскетбол", callback_data="game_basketball")],
-        [InlineKeyboardButton(text="🎯 Дартс", callback_data="game_darts")],
-        [InlineKeyboardButton(text="⚽ Футбол", callback_data="game_football")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+        [InlineKeyboardButton(text="🎲 КУБ   |  x2–x6", callback_data="game_cube")],
+        [InlineKeyboardButton(text="🏀 БАСКЕТБОЛ | x1.5–x7", callback_data="game_basketball")],
+        [InlineKeyboardButton(text="🎯 ДАРТС   |  x5–x10", callback_data="game_darts")],
+        [InlineKeyboardButton(text="⚽ ФУТБОЛ  |  x1.5–x8", callback_data="game_football")],
+        [InlineKeyboardButton(text="🏠 НА ГЛАВНУЮ", callback_data="main_menu")]
     ])
 
 def cube_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Больше/Меньше (x2)", callback_data="mode:less_more")],
-        [InlineKeyboardButton(text="Чёт/Нечет (x2)", callback_data="mode:even_odd")],
-        [InlineKeyboardButton(text="Угадать число (x6)", callback_data="mode:exact")],
-        [InlineKeyboardButton(text="Диапазон (x?)", callback_data="mode:range")],
-        [InlineKeyboardButton(text="Больше 3.5 / Меньше 3.5 (x2)", callback_data="mode:35")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
-    ])
-
-def basketball_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Точное попадание (x7)", callback_data="basket_exact")],
-        [InlineKeyboardButton(text="Попадание в кольцо (x3)", callback_data="basket_ring")],
-        [InlineKeyboardButton(text="Мимо (x1.5)", callback_data="basket_miss")],
-        [InlineKeyboardButton(text="Щит (x2.5)", callback_data="basket_board")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
-    ])
-
-def darts_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Яблочко (x10)", callback_data="darts_bullseye")],
-        [InlineKeyboardButton(text="20 (x5)", callback_data="darts_20")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
-    ])
-
-def football_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Гол в девятку (x8)", callback_data="foot_nine")],
-        [InlineKeyboardButton(text="Гол в створ (x3)", callback_data="foot_target")],
-        [InlineKeyboardButton(text="Мимо (x1.5)", callback_data="foot_miss")],
-        [InlineKeyboardButton(text="Штанга/перекладина (x5)", callback_data="foot_post")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="game_menu")]
-    ])
-
-def my_accounts_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Мои Telegram аккаунты", callback_data="list_tg_accounts")],
-        [InlineKeyboardButton(text="📘 Мои VK аккаунты", callback_data="list_vk_accounts")],
-        [InlineKeyboardButton(text="➕ Подключить новый", callback_data="connect_new_account")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-    ])
-
-def connect_new_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Telegram", callback_data="add_tg")],
-        [InlineKeyboardButton(text="📘 VK", callback_data="add_vk")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="my_accounts")]
-    ])
-
-async def tg_accounts_list(user_id: int):
-    accounts = await get_user_tg_accounts(user_id)
-    kb = []
-    for acc in accounts:
-        status = "✅" if acc["is_active"] else "❌"
-        kb.append([InlineKeyboardButton(text=f"{status} {acc['name']} ({acc['phone']})", callback_data=f"tg_acc_{acc['id']}")])
-    kb.append([InlineKeyboardButton(text="➕ Добавить", callback_data="add_tg")])
-    kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_accounts")])
-    return InlineKeyboardMarkup(inline_keyboard=kb)
-
-async def vk_accounts_list(user_id: int):
-    accounts = await get_user_vk_accounts(user_id)
-    kb = []
-    for acc in accounts:
-        status = "✅" if acc["is_active"] else "❌"
-        kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
-    kb.append([InlineKeyboardButton(text="➕ Добавить", callback_data="add_vk")])
-    kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_accounts")])
-    return InlineKeyboardMarkup(inline_keyboard=kb)
-
-def admin_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
-        [InlineKeyboardButton(text="📊 Расширенная статистика", callback_data="admin_ext_stats")],
-        [InlineKeyboardButton(text="💰 Управление балансом", callback_data="admin_balance_manage")],
-        [InlineKeyboardButton(text="🎁 Выдать подписку", callback_data="admin_give_sub")],
-        [InlineKeyboardButton(text="📢 Глобал рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="🎫 Промокоды", callback_data="admin_promocodes")],
-        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdraws")],
-        [InlineKeyboardButton(text="📥 Экспорт пользователей (CSV)", callback_data="admin_export_csv")],
-        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="main_menu")]
+        [InlineKeyboardButton(text="📈 МЕНЬШЕ / БОЛЬШЕ (1-3 / 4-6)     x2", callback_data="mode:less_more")],
+        [InlineKeyboardButton(text="🔢 ЧЁТ / НЕЧЕТ                        x2", callback_data="mode:even_odd")],
+        [InlineKeyboardButton(text="🎯 УГАДАЙ ЧИСЛО (от 1 до 6)           x6", callback_data="mode:exact")],
+        [InlineKeyboardButton(text="🎲 ДИАПАЗОН (например 2-4)            x? ", callback_data="mode:range")],
+        [InlineKeyboardButton(text="⚖️ БОЛЬШЕ 3.5 / МЕНЬШЕ 3.5            x2", callback_data="mode:35")],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="game_menu")]
     ])
 
 def after_game_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Ещё раз", callback_data="cube_again"),
-         InlineKeyboardButton(text="⬆️ +1$", callback_data="cube_inc"),
-         InlineKeyboardButton(text="⬇️ -1$", callback_data="cube_dec"),
-         InlineKeyboardButton(text="💰 Ва-банк", callback_data="cube_allin")],
-        [InlineKeyboardButton(text="🔙 В меню", callback_data="game_menu")]
+        [
+            InlineKeyboardButton(text="🔄 ИГРАТЬ ЕЩЁ", callback_data="again"),
+            InlineKeyboardButton(text="💰 +1$", callback_data="inc_bet"),
+            InlineKeyboardButton(text="💸 -1$", callback_data="dec_bet"),
+            InlineKeyboardButton(text="🔥 ВА-БАНК", callback_data="all_in")
+        ],
+        [InlineKeyboardButton(text="🏠 В ГЛАВНОЕ МЕНЮ", callback_data="game_menu")]
+    ])
+
+def profile_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💳 ПОПОЛНИТЬ", callback_data="deposit"),
+            InlineKeyboardButton(text="💸 ВЫВЕСТИ", callback_data="withdraw")
+        ],
+        [
+            InlineKeyboardButton(text="🎁 ПРОМОКОД", callback_data="activate_promo"),
+            InlineKeyboardButton(text="💎 ПОДПИСКА", callback_data="buy_sub")
+        ],
+        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
+    ])
+
+def admin_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users")],
+        [InlineKeyboardButton(text="📊 РАСШИРЕННАЯ СТАТИСТИКА", callback_data="admin_ext_stats")],
+        [InlineKeyboardButton(text="💰 БАЛАНСЫ", callback_data="admin_balance_manage")],
+        [InlineKeyboardButton(text="🎁 ВЫДАТЬ ПОДПИСКУ", callback_data="admin_give_sub")],
+        [InlineKeyboardButton(text="📢 ГЛОБАЛ РАССЫЛКА", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🎫 ПРОМОКОДЫ", callback_data="admin_promocodes")],
+        [InlineKeyboardButton(text="💸 ЗАЯВКИ НА ВЫВОД", callback_data="admin_withdraws")],
+        [InlineKeyboardButton(text="📥 ЭКСПОРТ CSV", callback_data="admin_export_csv")],
+        [InlineKeyboardButton(text="📋 ЛОГИ РАССЫЛОК", callback_data="admin_broadcast_stats")],
+        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
     ])
 
 def back_button(callback_data: str):
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=callback_data)]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data=callback_data)]
+    ])
 
 # ========== FSM состояния ==========
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
@@ -504,12 +471,28 @@ async def start_cmd(message: types.Message):
     await create_user(message.from_user.id, message.from_user.username or str(message.from_user.id))
     if not await is_subscribed_to_channel(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub_start")]
+            [InlineKeyboardButton(text="📢 ПОДПИСАТЬСЯ", url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(text="✅ ПРОВЕРИТЬ", callback_data="check_sub_start")]
         ])
         await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
         return
-    await message.answer("🎲 Добро пожаловать!", reply_markup=main_menu(message.from_user.id))
+
+    text = (
+        "✨ * ДОБРО ПОЖАЛОВАТЬ В eSim БОТ * ✨\n\n"
+        "┌─────────────────────────────┐\n"
+        "│  🎲 *ИГРЫ С РЕАЛЬНЫМ ВЫВОДОМ*  │\n"
+        "├─────────────────────────────┤\n"
+        "│  💰 Выигрывай реальные USDT  │\n"
+        "│  📢 Делай рассылки Telegram/VK│\n"
+        "│  🔐 Защита аккаунтов          │\n"
+        "└─────────────────────────────┘\n\n"
+        "▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰\n"
+        "✅ *ТВОЙ БАЛАНС:* 0.00$\n"
+        "✅ *ПОДПИСКА:* активна\n"
+        "▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰\n\n"
+        "👇 *Выбери действие в меню ниже*"
+    )
+    await message.answer(text, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "check_sub_start")
 async def check_sub_start(callback: types.CallbackQuery):
@@ -529,14 +512,19 @@ async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
 async def profile(callback: types.CallbackQuery):
     user = await get_user(callback.from_user.id)
     balance = user["balance"]
-    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y %H:%M') if user["sub_until"] else "Нет"
-    text = f"👤 Профиль\n💰 Баланс: {balance:.2f}$\n⏳ Подписка до: {sub_until}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Пополнить", callback_data="deposit"), InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
-        [InlineKeyboardButton(text="💎 Подписка", callback_data="buy_sub"), InlineKeyboardButton(text="🎫 Активировать промокод", callback_data="activate_promo")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-    ])
-    await callback.message.edit_text(text, reply_markup=kb)
+    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
+    text = (
+        "👑 *| ВАШ ПРОФИЛЬ |* 👑\n\n"
+        "┌───────────────────┐\n"
+        f"│  💰 *БАЛАНС*      │ `{balance:.2f}$`\n"
+        "├───────────────────┤\n"
+        f"│  💎 *ПОДПИСКА*    │ до `{sub_until}`\n"
+        "└───────────────────┘\n\n"
+        "▫️ Пополните счёт, чтобы начать игру\n"
+        "▫️ Активируйте промокод для бонусных дней\n"
+        "▫️ Подписка откроет доступ к рассылкам"
+    )
+    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "my_accounts")
@@ -1887,16 +1875,18 @@ async def game_bet(message: types.Message, state: FSMContext):
 async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     if user_id not in user_games or user_games[user_id].get('bet') is None:
-        await callback.answer("Ошибка, начните сначала", show_alert=True)
+        await callback.answer("❌ Ошибка, начните сначала", show_alert=True)
         await state.clear()
         return
     bet = user_games[user_id]['bet']
     mode = user_games[user_id]['mode']
     choice_parts = callback.data.split(':')
     choice = choice_parts[2] if len(choice_parts) > 2 else choice_parts[1]
+
     msg = await callback.message.answer_dice(emoji="🎲")
     roll = msg.dice.value
-    await asyncio.sleep(1)
+    await asyncio.sleep(1.2)
+
     win = False
     if mode == 'less_more':
         win = (choice == 'less' and roll <= 3) or (choice == 'more' and roll >= 4)
@@ -1904,21 +1894,42 @@ async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
         win = (choice == 'even' and roll % 2 == 0) or (choice == 'odd' and roll % 2 == 1)
     elif mode == '35':
         win = (choice == 'gt35' and roll > 3.5) or (choice == 'lt35' and roll < 3.5)
+
     if win:
         payout = bet * 2
         await update_balance(user_id, payout)
         new_balance = await get_balance(user_id)
-        result = f"🎲 Выпало {roll}\n✅ ВЫИГРЫШ: {bet}$ x2 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
+        result = (
+            "🎉 *┌────────────────────────────┐* 🎉\n"
+            "   *│        ВЫ ВЫИГРАЛИ!        │*\n"
+            f"   *│      СТАВКА : {bet:.2f}$          │*\n"
+            f"   *│      ВЫИГРЫШ: {payout:.2f}$ ×2      │*\n"
+            f"   *│      БАЛАНС : {new_balance:.2f}$      │*\n"
+            "   *└────────────────────────────┘*\n"
+            f"🎲 *Вам выпало число {roll}*\n"
+            "✨ *Поздравляем! Сыграйте ещё!* ✨"
+        )
     else:
         await update_balance(user_id, -bet)
         new_balance = await get_balance(user_id)
-        result = f"🎲 Выпало {roll}\n❌ ПРОИГРЫШ: {bet}$\n💰 Баланс: {new_balance:.2f}$"
+        result = (
+            "💔 *┌────────────────────────────┐* 💔\n"
+            "   *│         ПРОИГРЫШ :(         │*\n"
+            f"   *│      СТАВКА : {bet:.2f}$          │*\n"
+            f"   *│      ПОТЕРЯНО  : {bet:.2f}$          │*\n"
+            f"   *│      БАЛАНС : {new_balance:.2f}$      │*\n"
+            "   *└────────────────────────────┘*\n"
+            f"🎲 *Выпало число {roll}*\n"
+            "🔄 *Удача придёт в следующий раз!*"
+        )
+
+    # Сохраняем данные для кнопок "ещё раз"
     user_games[user_id]['last_game_type'] = 'cube'
     user_games[user_id]['last_bet'] = bet
     user_games[user_id]['last_cube_mode'] = mode
-    await callback.message.answer(result, reply_markup=after_game_menu())
+
+    await callback.message.answer(result, reply_markup=after_game_menu(), parse_mode="Markdown")
     await state.clear()
-    user_last_game[user_id] = {"bet": bet, "mode": mode}
     await callback.answer()
 
 # ---- Кубик: exact (угадать число) ----
