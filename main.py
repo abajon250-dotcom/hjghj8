@@ -497,7 +497,7 @@ async def start_cmd(message: types.Message):
     try:
         await message.answer_animation(
             animation="https://i.gifer.com/X63H.gif",
-            caption="🎉 *ДОБРО ПОЖАЛОВАТЬ В eSim ПРИЕМКА!*",
+            caption="🎉 *ДОБРО ПОЖАЛОВАТЬ В Quasar!*",
             parse_mode="Markdown"
         )
     except:
@@ -1189,11 +1189,13 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         async def update_progress():
             nonlocal sent, errors, total, start_time
             elapsed = time.time() - start_time
-            percent = (sent + errors) / total * 100
+            processed = sent + errors
+            percent = (processed / total) * 100 if total else 0
             speed = sent / elapsed * 60 if elapsed > 0 else 0
-            remaining = (total - sent - errors) / (speed / 60) if speed > 0 else 0
-            bar_len = 10
+            remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+            bar_len = 20  # длина в символах
             filled = int(bar_len * processed / total) if total else 0
+            # Зелёные и белые квадраты
             bar = "🟩" * filled + "⬜" * (bar_len - filled)
             text_status = (
                 f"📲 *Аккаунт {acc_name} загружен!*\n\n"
@@ -1204,7 +1206,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
                 f"   ┗ Контакты: {total}\n"
                 f"🔄 Прогресс — {percent:.1f}%\n"
                 f"{bar}\n"
-                f"⏲️ Осталось {remaining:.1f} с."
+                f"⏲️ Осталось {remaining_sec:.1f} с."
             )
             await status_msg.edit_text(text_status, parse_mode="Markdown")
 
