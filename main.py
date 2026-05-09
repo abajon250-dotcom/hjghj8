@@ -493,7 +493,7 @@ async def start_cmd(message: types.Message):
         await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
         return
 
-    # Gif приветствия
+    # ГИФКА (первое сообщение)
     try:
         await message.answer_animation(
             animation="https://i.gifer.com/X63H.gif",
@@ -503,18 +503,12 @@ async def start_cmd(message: types.Message):
     except:
         pass
 
-    text = (
-        "✨ * ДОБРО ПОЖАЛОВАТЬ В eSim БОТ * ✨\n\n"
-        "┌─────────────────────────────┐\n"
-        "│  🎲 *ИГРЫ С РЕАЛЬНЫМ ВЫВОДОМ*  │\n"
-        "├─────────────────────────────┤\n"
-        "│  💰 Выигрывай реальные USDT  │\n"
-        "│  📢 Делай рассылки Telegram/VK│\n"
-        "│  🔐 Защита аккаунтов          │\n"
-        "└─────────────────────────────┘\n\n"
-        "👇 *Выбери действие в меню ниже*"
+    # ВТОРОЕ СООБЩЕНИЕ — только кнопки, без лишнего текста
+    await message.answer(
+        "👇 *Главное меню*",
+        reply_markup=main_menu(message.from_user.id),
+        parse_mode="Markdown"
     )
-    await message.answer(text, reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "check_sub_start")
 async def check_sub_start(callback: types.CallbackQuery):
@@ -1157,8 +1151,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         return
     try:
         delay = float(raw.replace(',', '.'))
-        if delay < 1:
-            delay = 1
+        if delay < 1: delay = 1
     except ValueError:
         await message.answer("❌ Нужно число, например 5")
         return
@@ -1168,15 +1161,14 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     acc_id = data.get("acc_id")
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+        row = await conn.fetchrow("SELECT session_file, phone, name FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
             await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
-        session_file, phone = row["session_file"], row["phone"]
+        session_file, phone, acc_name = row["session_file"], row["phone"], row["name"]
 
-    status_msg = await message.answer("🚀 **Запуск рассылки...**\n📋 Получаю список диалогов...", parse_mode="Markdown")
-
+    status_msg = await message.answer(f"📲 *Аккаунт {acc_name} загружается...*", parse_mode="Markdown")
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
@@ -1185,82 +1177,68 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         targets = [d for d in dialogs if d.is_user]
         total = len(targets)
         if total == 0:
-            await status_msg.edit_text("❌ Нет диалогов для рассылки.")
+            await status_msg.edit_text("❌ Нет диалогов (пользователей) для рассылки.")
             return
 
         sent = 0
+        errors = 0
         start_time = time.time()
         last_update = start_time
 
+        # Функция обновления прогресса (каждые 5 сек)
         async def update_progress():
-            nonlocal sent, total, start_time
+            nonlocal sent, errors, total, start_time
             elapsed = time.time() - start_time
+            percent = (sent + errors) / total * 100
             speed = sent / elapsed * 60 if elapsed > 0 else 0
-            remaining_seconds = (total - sent) * delay if delay > 0 else 0
-            if speed > 0 and sent > 0:
-                remaining_seconds = (total - sent) / (speed / 60)
-            remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_seconds))
-            percent = (sent / total) * 100
-            await status_msg.edit_text(
-                f"📤 **Рассылка Telegram**\n"
-                f"✅ Отправлено: {sent}/{total} ({percent:.1f}%)\n"
-                f"⏳ Осталось: {remaining_str}\n"
-                f"⚡ Скорость: {speed:.1f} сообщ/мин",
-                parse_mode="Markdown"
+            remaining = (total - sent - errors) / (speed / 60) if speed > 0 else 0
+            bar_len = 10
+            filled = int(bar_len * processed / total) if total else 0
+            bar = "🟩" * filled + "⬜" * (bar_len - filled)
+            text_status = (
+                f"📲 *Аккаунт {acc_name} загружен!*\n\n"
+                f"👤 Имя: {acc_name}\n"
+                f"🤙 Телефон: {phone}\n"
+                f"📂 Всего чатов: {total} шт.\n"
+                f"   ┣ Диалоги: {len(dialogs)}\n"
+                f"   ┗ Контакты: {total}\n"
+                f"🔄 Прогресс — {percent:.1f}%\n"
+                f"{bar}\n"
+                f"⏲️ Осталось {remaining:.1f} с."
             )
+            await status_msg.edit_text(text_status, parse_mode="Markdown")
 
-        await status_msg.edit_text(
-            f"📊 **Рассылка запущена**\n👥 Получателей: {total}\n⏱️ Задержка: {delay} сек",
-            parse_mode="Markdown"
-        )
+        await update_progress()
 
         for dialog in targets:
             try:
                 await client.send_message(dialog.entity, text)
                 sent += 1
-                now = time.time()
-                if now - last_update >= 5:
-                    await update_progress()
-                    last_update = now
-                await asyncio.sleep(delay)
             except Exception as e:
-                error_str = str(e)
-                if "AuthKeyError" in error_str or "UnauthorizedError" in error_str or "The key is not registered" in error_str:
-                    await deactivate_tg_account(message.from_user.id, acc_id)
-                    await status_msg.edit_text(
-                        f"❌ **Аккаунт {phone} заблокирован или сессия устарела.**\nРассылка прервана. Аккаунт деактивирован.",
-                        parse_mode="Markdown"
-                    )
-                    await message.answer_animation(
-                        animation="https://i.gifer.com/84OP.gif",
-                        caption="❌ *РАССЫЛКА ПРЕРВАНА*",
-                        parse_mode="Markdown"
-                    )
-                    await client.disconnect()
-                    await state.clear()
-                    return
-                else:
-                    continue
+                errors += 1
+                logging.warning(f"Ошибка {dialog.entity}: {e}")
+            now = time.time()
+            if now - last_update >= 5:
+                await update_progress()
+                last_update = now
+            await asyncio.sleep(delay)
 
-        total_time = time.time() - start_time
-        total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
-        await status_msg.edit_text(
-            f"✅ **Рассылка завершена!**\n📊 Отправлено: {sent} из {total}\n⏱️ Затрачено: {total_time_str}",
-            parse_mode="Markdown"
+        elapsed_total = time.time() - start_time
+        success_rate = (sent / (sent + errors)) * 100 if (sent+errors) > 0 else 0
+        final_report = (
+            f"📲 *Спам MAX завершен!*\n\n"
+            f"📝 Отправлено: {sent}/{total}\n"
+            f"   ┣ ✅ Успешно: {sent}\n"
+            f"   ┗ ❌ Ошибки: {errors}\n"
+            f"❌ Успешность: {success_rate:.1f}%\n"
+            f"⏲️ Время: {elapsed_total:.1f} сек."
         )
-        # Гифка успеха
-        await message.answer_animation(
-            animation="https://i.gifer.com/2q3j.gif",
-            caption="✅ *РАССЫЛКА УСПЕШНО ЗАВЕРШЕНА!*",
-            parse_mode="Markdown"
-        )
+        await status_msg.edit_text(final_report, parse_mode="Markdown")
+    except (AuthKeyError, UnauthorizedError):
+        await deactivate_tg_account(message.from_user.id, acc_id)
+        await status_msg.edit_text(f"❌ Аккаунт {phone} деактивирован (сессия устарела).")
     except Exception as e:
-        await status_msg.edit_text(f"❌ **Ошибка:** {get_russian_error(e)}", parse_mode="Markdown")
-        await message.answer_animation(
-            animation="https://i.gifer.com/84OP.gif",
-            caption="❌ *ОШИБКА ПРИ РАССЫЛКЕ*",
-            parse_mode="Markdown"
-        )
+        await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
     finally:
         await client.disconnect()
         await state.clear()
@@ -1352,116 +1330,112 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT token, vk_name FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ VK аккаунт не найден")
+            await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
         token, vk_name = row["token"], row["vk_name"]
 
-    status_msg = await message.answer("🚀 **Запуск VK рассылки...**\n📋 Получаю список...", parse_mode="Markdown")
+    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
 
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
     try:
-        vk.users.get()
+        # Проверяем токен и получаем базовую инфу
+        vk_user = vk.users.get()[0]
+        full_name = f"{vk_user['first_name']} {vk_user['last_name']}"
     except Exception as e:
-        if "invalid token" in str(e).lower():
+        error_lower = str(e).lower()
+        if "invalid token" in error_lower or "access_token was given to another ip" in error_lower:
             await delete_vk_account(message.from_user.id, acc_id)
-            await status_msg.edit_text(f"❌ Аккаунт {vk_name} заблокирован. Удалён.", parse_mode="Markdown")
-            await message.answer_animation(
-                animation="https://i.gifer.com/84OP.gif",
-                caption="❌ *ОШИБКА АВТОРИЗАЦИИ VK*",
-                parse_mode="Markdown"
-            )
-            await state.clear()
-            return
+            await status_msg.edit_text(f"❌ Аккаунт {vk_name} удалён (токен недействителен или привязан к другому IP).")
         else:
-            await status_msg.edit_text(f"❌ Ошибка VK: {e}", parse_mode="Markdown")
-            await state.clear()
-            return
+            await status_msg.edit_text(f"❌ Ошибка VK: {get_russian_error(e)}")
+        await state.clear()
+        return
 
+    # Собираем получателей
     try:
         friends = vk.friends.get()["items"]
-        convs = vk.messages.getConversations(count=200)["items"]
-        targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
+        conversations = vk.messages.getConversations(count=200)["items"]
+        chats = [c["conversation"]["peer"]["id"] for c in conversations]
+        total_friends = len(friends)
+        total_chats = len(chats)
+        targets = friends + chats
         total = len(targets)
-        if total == 0:
-            await status_msg.edit_text("❌ Нет получателей (друзей или бесед).")
-            return
-
-        sent = 0
-        start_time = time.time()
-        last_update = start_time
-
-        async def update_progress():
-            nonlocal sent, total, start_time
-            elapsed = time.time() - start_time
-            speed = sent / elapsed * 60 if elapsed > 0 else 0
-            remaining_seconds = (total - sent) * delay if delay > 0 else 0
-            if speed > 0 and sent > 0:
-                remaining_seconds = (total - sent) / (speed / 60)
-            remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_seconds))
-            percent = (sent / total) * 100
-            await status_msg.edit_text(
-                f"📤 **VK рассылка**\n"
-                f"✅ Отправлено: {sent}/{total} ({percent:.1f}%)\n"
-                f"👥 Друзей: {len(friends)} | 💬 Бесед: {len(convs)}\n"
-                f"⏳ Осталось: {remaining_str}\n"
-                f"⚡ Скорость: {speed:.1f} сообщ/мин",
-                parse_mode="Markdown"
-            )
-
-        await status_msg.edit_text(
-            f"📊 **VK рассылка запущена**\n👥 Друзей: {len(friends)} | 💬 Бесед: {len(convs)}\n⏱️ Задержка: {delay} сек",
-            parse_mode="Markdown"
-        )
-
-        for target in targets:
-            try:
-                if isinstance(target, int):
-                    vk.messages.send(user_id=target, message=text, random_id=0)
-                else:
-                    vk.messages.send(peer_id=target, message=text, random_id=0)
-                sent += 1
-                now = time.time()
-                if now - last_update >= 5:
-                    await update_progress()
-                    last_update = now
-                await asyncio.sleep(delay)
-            except Exception as e:
-                error_str = str(e).lower()
-                if "invalid token" in error_str or "access denied" in error_str:
-                    await delete_vk_account(message.from_user.id, acc_id)
-                    await status_msg.edit_text(f"❌ VK аккаунт {vk_name} заблокирован. Удалён.", parse_mode="Markdown")
-                    await message.answer_animation(
-                        animation="https://i.gifer.com/84OP.gif",
-                        caption="❌ *VK АККАУНТ ЗАБЛОКИРОВАН*",
-                        parse_mode="Markdown"
-                    )
-                    await state.clear()
-                    return
-                else:
-                    continue
-
-        total_time = time.time() - start_time
-        total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
-        await status_msg.edit_text(
-            f"✅ **VK рассылка завершена!**\n📊 Отправлено: {sent} из {total}\n⏱️ Затрачено: {total_time_str}",
-            parse_mode="Markdown"
-        )
-        await message.answer_animation(
-            animation="https://i.gifer.com/2q3j.gif",
-            caption="✅ *VK РАССЫЛКА УСПЕШНО ЗАВЕРШЕНА!*",
-            parse_mode="Markdown"
-        )
     except Exception as e:
-        await status_msg.edit_text(f"❌ **Ошибка VK:** {get_russian_error(e)}", parse_mode="Markdown")
-        await message.answer_animation(
-            animation="https://i.gifer.com/84OP.gif",
-            caption="❌ *КРИТИЧЕСКАЯ ОШИБКА VK*",
-            parse_mode="Markdown"
-        )
-    finally:
+        await status_msg.edit_text(f"❌ Не удалось получить список друзей/бесед: {get_russian_error(e)}")
         await state.clear()
+        return
+
+    if total == 0:
+        await status_msg.edit_text("❌ Нет друзей и бесед для рассылки.")
+        await state.clear()
+        return
+
+    sent = 0
+    errors = 0
+    start_time = time.time()
+    last_update = start_time
+
+    # Функция обновления прогресса (аналогично TG)
+    async def update_progress():
+        nonlocal sent, errors, total, start_time
+        elapsed = time.time() - start_time
+        processed = sent + errors
+        percent = (processed / total) * 100 if total else 0
+        speed = sent / elapsed * 60 if elapsed > 0 else 0
+        remaining = (total - processed) / (speed / 60) if speed > 0 else 0
+        bar_len = 10
+        filled = int(bar_len * processed / total) if total else 0
+        bar = "🟩" * filled + "⬜" * (bar_len - filled)
+        text_status = (
+            f"📲 *Аккаунт {vk_name} загружен!*\n\n"
+            f"👤 Имя: {full_name}\n"
+            f"🤙 VK ID: {vk_user['id']}\n"
+            f"📂 Всего получателей: {total} шт.\n"
+            f"   ┣ Друзья: {total_friends}\n"
+            f"   ┗ Беседы: {total_chats}\n"
+            f"🔄 Прогресс — {percent:.1f}%\n"
+            f"{bar}\n"
+            f"⏲️ Осталось {remaining:.1f} с."
+        )
+        await status_msg.edit_text(text_status, parse_mode="Markdown")
+
+    # Первый показ
+    await update_progress()
+
+    # Рассылка
+    for target in targets:
+        try:
+            if isinstance(target, int):
+                vk.messages.send(user_id=target, message=text, random_id=0)
+            else:
+                vk.messages.send(peer_id=target, message=text, random_id=0)
+            sent += 1
+        except Exception as e:
+            errors += 1
+            logging.warning(f"VK ошибка отправки {target}: {e}")
+        # Обновляем прогресс каждые 5 секунд
+        now = time.time()
+        if now - last_update >= 5:
+            await update_progress()
+            last_update = now
+        await asyncio.sleep(delay)
+
+    # Финальный отчёт (как в примере)
+    elapsed_total = time.time() - start_time
+    success_rate = (sent / (sent + errors)) * 100 if (sent + errors) > 0 else 0
+    final_report = (
+        f"📲 *Спам VK завершен!*\n\n"
+        f"📝 Отправлено: {sent}/{total}\n"
+        f"   ┣ ✅ Успешно: {sent}\n"
+        f"   ┗ ❌ Ошибки: {errors}\n"
+        f"❌ Успешность: {success_rate:.1f}%\n"
+        f"⏲️ Время: {elapsed_total:.1f} сек."
+    )
+    await status_msg.edit_text(final_report, parse_mode="Markdown")
+    await log_broadcast(message.from_user.id, "vk", acc_id, total, total_friends, total_chats, sent, "completed")
+    await state.clear()
 
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
