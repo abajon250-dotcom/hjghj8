@@ -1234,7 +1234,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         elapsed_total = time.time() - start_time
         success_rate = (sent / (sent + errors)) * 100 if (sent + errors) > 0 else 0
         final_report = (
-            f"📲 *Спам Telegram завершен!*\n\n"
+            f"📲 *Спам MAX завершен!*\n\n"
             f"📝 Отправлено: {sent}/{total}\n"
             f"   ┣ ✅ Успешно: {sent}\n"
             f"   ┗ ❌ Ошибки: {errors}\n"
@@ -1243,12 +1243,22 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         )
         await status_msg.edit_text(final_report, parse_mode="Markdown")
 
+        # Логируем успешность
+        logging.info(f"TG рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
+
         # Отправляем гифку в зависимости от успешности
-        gif_url = SUCCESS_GIF_URL if success_rate >= 80 else ERROR_GIF_URL
+        if success_rate >= 80:
+            gif_url = SUCCESS_GIF_URL
+            caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
+        else:
+            gif_url = ERROR_GIF_URL
+            caption = "⚠️ *РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
+
         try:
-            await message.answer_animation(animation=gif_url, caption="🎉 *РАССЫЛКА ЗАВЕРШЕНА!* 🎉", parse_mode="Markdown")
+            await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
         except Exception as gif_err:
             logging.warning(f"Не удалось отправить гифку: {gif_err}")
+            await message.answer(caption, parse_mode="Markdown")
 
     except (AuthKeyError, UnauthorizedError):
         await deactivate_tg_account(message.from_user.id, acc_id)
@@ -1256,13 +1266,13 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         try:
             await message.answer_animation(animation=ERROR_GIF_URL, caption="⚠️ *АККАУНТ ДЕАКТИВИРОВАН*", parse_mode="Markdown")
         except:
-            pass
+            await message.answer("⚠️ Аккаунт деактивирован")
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
         try:
             await message.answer_animation(animation=ERROR_GIF_URL, caption="❌ *ОШИБКА РАССЫЛКИ*", parse_mode="Markdown")
         except:
-            pass
+            await message.answer("❌ Ошибка рассылки")
     finally:
         await client.disconnect()
         await state.clear()
@@ -1373,7 +1383,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             try:
                 await message.answer_animation(animation=ERROR_GIF_URL, caption="⚠️ *АККАУНТ УДАЛЁН*", parse_mode="Markdown")
             except:
-                pass
+                await message.answer("⚠️ Аккаунт удалён")
             await state.clear()
             return
         else:
@@ -1389,7 +1399,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
         total = len(targets)
         if total == 0:
-            await status_msg.edit_text("❌ Нет получателей (друзей или бесед).")
+            await status_msg.edit_text("❌ Нет получателей.")
             return
 
         sent = 0
@@ -1449,19 +1459,26 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         )
         await status_msg.edit_text(final_report, parse_mode="Markdown")
 
-        # Отправляем гифку
-        gif_url = SUCCESS_GIF_URL if success_rate >= 80 else ERROR_GIF_URL
+        logging.info(f"VK рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
+
+        if success_rate >= 80:
+            gif_url = SUCCESS_GIF_URL
+            caption = "🎉 *VK РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
+        else:
+            gif_url = ERROR_GIF_URL
+            caption = "⚠️ *VK РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
+
         try:
-            await message.answer_animation(animation=gif_url, caption="🎉 *VK РАССЫЛКА ЗАВЕРШЕНА!* 🎉", parse_mode="Markdown")
+            await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
         except:
-            pass
+            await message.answer(caption, parse_mode="Markdown")
 
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка VK рассылки: {e}")
         try:
             await message.answer_animation(animation=ERROR_GIF_URL, caption="❌ *ОШИБКА VK РАССЫЛКИ*", parse_mode="Markdown")
         except:
-            pass
+            await message.answer("❌ Ошибка VK рассылки")
     finally:
         await state.clear()
 
