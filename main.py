@@ -3480,52 +3480,44 @@ async def mass_add_file(message: types.Message, state: FSMContext):
         await message.answer_document(types.FSInputFile("/tmp/errors.txt"), caption="Ошибки")
     await state.clear()
 
+from aiogram.filters import StateFilter
+
+class MassVK(StatesGroup):
+    waiting_tokens = State()
+
 @dp.callback_query(F.data == "mass_vk")
 async def mass_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer(
-        "📎 Введите список VK токенов через запятую (можно с пробелами после запятой).\n"
-        "Пример:\n`token1, token2, token3`\n\n"
-        "Каждый токен будет добавлен как отдельный аккаунт.",
-        parse_mode="Markdown"
+        "📎 Введите список VK токенов через запятую (можно с пробелами).\nПример:\n`token1, token2, token3`"
     )
-    await state.set_state("mass_vk_tokens")
+    await state.set_state(MassVK.waiting_tokens)
     await callback.answer()
 
-@dp.message(StateFilter("mass_vk_tokens"))
+@dp.message(MassVK.waiting_tokens)
 async def mass_vk_process(message: types.Message, state: FSMContext):
     raw = message.text.strip()
-    # Разделяем по запятой
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
     if not tokens:
-        await message.answer("❌ Не найдено ни одного токена. Отмена.")
+        await message.answer("❌ Не найдено ни одного токена.")
         await state.clear()
         return
-
     added = 0
     errors = []
     for token in tokens:
         try:
-            # Проверяем токен
             vk_session = vk_api.VkApi(token=token)
             vk = vk_session.get_api()
             user = vk.users.get()[0]
             name = f"{user['first_name']} {user['last_name']}"
-            acc_id = await add_vk_account(message.from_user.id, token, name)
+            await add_vk_account(message.from_user.id, token, name)
             added += 1
         except Exception as e:
-            errors.append(f"{token[:10]}...: {get_russian_error(e)}")
-        await asyncio.sleep(0.5)  # небольшая задержка, чтобы не забанили
-
-    result_text = f"✅ Добавлено VK аккаунтов: {added}\n❌ Ошибок: {len(errors)}"
-    if errors:
-        result_text += "\n\nОшибки:\n" + "\n".join(errors[:5])
-        if len(errors) > 5:
-            result_text += f"\n... и ещё {len(errors)-5}"
-
-    await message.answer(result_text)
+            errors.append(f"{token[:10]}...: {str(e)}")
+        await asyncio.sleep(0.5)
+    await message.answer(f"✅ Добавлено: {added}\n❌ Ошибок: {len(errors)}")
     await state.clear()
 
 
