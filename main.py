@@ -465,13 +465,16 @@ def admin_menu():
 
 def back_button(callback_data: str):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data=callback_data)]
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data=callback_data)],
+        [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data="cancel_add_account")]
     ])
+
+
 
 # ========== FSM состояния ==========
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
-class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_voice = State(); waiting_confirm = State()
+class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State();  waiting_type = State(); waiting_voice = State(); waiting_confirm = State()
 class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
 class AdminAddBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
 class AdminRemoveBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
@@ -1144,13 +1147,15 @@ async def tg_leave_execute(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("tg_broadcast_"))
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 ТЕКСТ", callback_data="broadcast_type_text")],
         [InlineKeyboardButton(text="🎙️ ГОЛОСОВОЕ", callback_data="broadcast_type_voice")],
         [InlineKeyboardButton(text="🔘 ТЕКСТ + КНОПКА", callback_data="broadcast_type_button")]
     ])
-    await callback.message.answer("Выберите тип сообщения:", reply_markup=kb)
+    await callback.message.answer("Выберите тип сообщения для рассылки:", reply_markup=kb)
     await state.set_state(BroadcastTG.waiting_type)
+    await callback.answer()
 
 @dp.message(BroadcastTG.waiting_text)
 async def broadcast_tg_text(message: types.Message, state: FSMContext):
@@ -1496,11 +1501,13 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
-async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
+async def add_tg_start(callback: types.CallbackQuery, state: FSMContext, cancel_button=None):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("📞 Введите номер телефона (+79991234567):")
+    await state.update_data(action="add_tg")  # запомним действие
+    await callback.answer("❌ Нужна подписка!", show_alert=True)
+    await callback.message.answer("⚠️ Введите номер телефона (+79991234567):", reply_markup=cancel_button())
     await state.set_state(AddTG.waiting_phone)
     await callback.answer()
 
@@ -1554,22 +1561,30 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
     client = data["client"]
     try:
         await client.sign_in(password=password)
-        me = await client.get_me()
-        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-        await add_tg_account(message.from_user.id, data["phone"], data["session_file"], name)
-        await message.answer(f"✅ Аккаунт {name} добавлен (2FA)!")
-        await client.disconnect()
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
-        await state.clear()
+    me = await client.get_me()
+    name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+    acc_id = await add_tg_account(message.from_user.id, phone, data["session_file"], name)
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ TG", callback_data="add_tg"),
+            InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")
+        ],
+        [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+    ])
+    await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
+    await client.disconnect()
+    await state.clear()
 
 @dp.callback_query(F.data == "add_vk")
 async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("🔑 Введите токен VK (access_token):")
+    await callback.message.answer(
+        "🔑 Введите токен VK (access_token):",
+        reply_markup=cancel_button()
+    )
     await state.set_state(AddVK.waiting_token)
     await callback.answer()
 
@@ -1580,21 +1595,18 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         vk_session = vk_api.VkApi(token=token)
         vk = vk_session.get_api()
         user = vk.users.get()[0]
-        name = f"{user['first_name']} {user['last_name']}"
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        acc_id = await add_vk_account(message.from_user.id, token, name)
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
-                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
-            ],
-            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
-        ])
-        await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
-        await state.clear()
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-        await state.clear()
+    name = f"{user['first_name']} {user['last_name']}"
+    acc_id = await add_vk_account(message.from_user.id, token, name)
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+            InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+        ],
+        [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+    ])
+    await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
+    await state.clear()
 
 # ========== ПОДПИСКА ==========
 @dp.callback_query(F.data == "buy_sub")
@@ -3250,6 +3262,32 @@ async def send_discord_notification(title, description, color=0x00ff00):
         webhook.add_embed(embed)
         await session.post(webhook.url, json=webhook.json)
 
+@dp.callback_query(F.data == "broadcast_type_text", BroadcastTG.waiting_type)
+async def broadcast_type_text(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(msg_type="text")
+    await callback.message.answer("Введите текст рассылки:")
+    await state.set_state(BroadcastTG.waiting_text)
+    await callback.answer()
+
+@dp.callback_query(F.data == "broadcast_type_voice", BroadcastTG.waiting_type)
+async def broadcast_type_voice(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(msg_type="voice")
+    await callback.message.answer("Отправьте голосовое сообщение:")
+    await state.set_state(BroadcastTG.waiting_voice)
+    await callback.answer()
+
+@dp.callback_query(F.data == "broadcast_type_button", BroadcastTG.waiting_type)
+async def broadcast_type_button(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(msg_type="button")
+    await callback.message.answer("Введите текст кнопки и URL через пробел (например: 'Перейти https://t.me/...'):")
+    await state.set_state(BroadcastTG.waiting_voice)  # временно, заменим на отдельное состояние
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_add_account")
+async def cancel_add_account(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Добавление аккаунта отменено.", reply_markup=None)
+    await callback.answer()
 
 # ========== ЗАПУСК ==========
 async def main():
