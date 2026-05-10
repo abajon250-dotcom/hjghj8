@@ -497,8 +497,8 @@ def connect_new_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="add_tg")],
         [InlineKeyboardButton(text="📘 VK", callback_data="add_vk")],
-        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")],
-        InlineKeyboardButton(text="📤 МАССОВО VK", callback_data="mass_vk")
+        [InlineKeyboardButton(text="📤 МАССОВО VK", callback_data="mass_vk")],
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")]
     ])
 
 def admin_menu():
