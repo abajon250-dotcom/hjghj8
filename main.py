@@ -3207,18 +3207,11 @@ async def check_tg_account_valid(owner_tg_id: int, acc_id: int, session_file: st
 
 async def periodic_account_check():
     while True:
-        await asyncio.sleep(3600)  # каждый час
+        await asyncio.sleep(60)  # раз в час
         async with db_pool.acquire() as conn:
-            # Проверяем VK аккаунты
-            vk_rows = await conn.fetch("SELECT id, owner_tg_id, token, vk_name FROM vk_accounts WHERE is_active=True")
+            vk_rows = await conn.fetch("SELECT id, owner_tg_id, token, vk_name FROM vk_accounts")
             for row in vk_rows:
                 await check_vk_account_valid(row["owner_tg_id"], row["id"], row["token"], row["vk_name"])
-                await asyncio.sleep(1)  # задержка, чтобы не спамить
-            # Проверяем Telegram аккаунты
-            tg_rows = await conn.fetch("SELECT id, owner_tg_id, session_file, phone FROM tg_accounts WHERE is_active=True")
-            for row in tg_rows:
-                await check_tg_account_valid(row["owner_tg_id"], row["id"], row["session_file"], row["phone"])
-                await asyncio.sleep(1)
 
 # Запустить в main() после инициализации:
 async def main():
@@ -3302,13 +3295,13 @@ async def tg_accounts_list(user_id: int):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 async def vk_accounts_list(user_id: int):
-    """Возвращает клавиатуру со списком VK аккаунтов пользователя"""
     accounts = await get_user_vk_accounts(user_id)
     kb = []
     for acc in accounts:
         status = "✅" if acc["is_active"] else "❌"
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
+    kb.append([InlineKeyboardButton(text="🧹 ОЧИСТИТЬ НЕАКТИВНЫЕ", callback_data="clean_inactive_vk")])  # ← новая кнопка
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -3519,6 +3512,27 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Добавлено: {added}\n❌ Ошибок: {len(errors)}")
     await state.clear()
 
+async def clean_invalid_vk_accounts(user_id: int):
+    """Удаляет все неактивные (❌) VK аккаунты пользователя"""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
+    deleted = 0
+    for row in rows:
+        try:
+            vk_session = vk_api.VkApi(token=row["token"])
+            vk = vk_session.get_api()
+            vk.users.get()
+        except Exception:
+            await delete_vk_account(user_id, row["id"])
+            deleted += 1
+    return deleted
+
+@dp.callback_query(F.data == "clean_inactive_vk")
+async def clean_inactive_vk(callback: types.CallbackQuery):
+    deleted = await clean_invalid_vk_accounts(callback.from_user.id)
+    await callback.answer(f"🧹 Удалено неактивных аккаунтов: {deleted}", show_alert=True)
+    # Обновляем список
+    await list_vk_accounts(callback)
 
 # ========== ЗАПУСК ==========
 async def main():
