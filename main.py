@@ -1826,8 +1826,13 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("🔑 Введите токен VK (access_token):")
-    await state.set_state(AddVK.waiting_token)   # ← ЭТО ОБЯЗАТЕЛЬНО
+    await callback.message.answer(
+        "🔑 **Отправьте VK токен.**\n"
+        "Если токен длинный, просто вставьте его – бот соберёт части автоматически.",
+        parse_mode="Markdown"
+    )
+    await state.update_data(token_parts=[], last_update=time.time())
+    await state.set_state(AddVK.collecting_token)
     await callback.answer()
 
 @dp.message(AddVK.waiting_token)
@@ -3967,6 +3972,55 @@ async def handle_captcha_solution(message: types.Message, state: FSMContext):
         else:
             await message.answer(f"❌ Ошибка: {e}")
 
+@dp.message(AddVK.collecting_token)
+async def collect_token(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    parts = data.get("token_parts", [])
+    # Добавляем новую часть
+    parts.append(message.text.strip())
+    await state.update_data(token_parts=parts, last_update=time.time())
+
+    # Если в очереди уже есть задача – отменяем её и создаём новую
+    if "timer_task" in data:
+        data["timer_task"].cancel()
+    # Запускаем таймер на 3 секунды
+    task = asyncio.create_task(finish_collection(message, state))
+    await state.update_data(timer_task=task)
+
+async def finish_collection(message: types.Message, state: FSMContext):
+    await asyncio.sleep(3)  # ждём 3 секунды после последнего сообщения
+    data = await state.get_data()
+    parts = data.get("token_parts", [])
+    full_token = "".join(parts)
+    if not full_token:
+        await message.answer("❓ Токен не получен. Повторите попытку.")
+        await state.clear()
+        return
+    # Проверяем и добавляем аккаунт
+    await process_vk_token(message, state, full_token)
+
+async def process_vk_token(message: types.Message, state: FSMContext, token: str):
+    """Проверка токена и добавление аккаунта"""
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        user = vk.users.get()[0]
+        name = f"{user['first_name']} {user['last_name']}"
+        acc_id = await add_vk_account(message.from_user.id, token, name)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ VK аккаунт **{name}** добавлен!", reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}\nПроверьте токен и повторите.", parse_mode="Markdown")
+    finally:
+        await state.clear()
+        
 # ========== ЗАПУСК ==========
 async def main():
     await init_db()
