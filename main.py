@@ -1454,8 +1454,10 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
 
     # Проверяем токен первым делом
+    # Проверяем токен первым делом
     try:
-        vk = vk_api.VkApi(token=token)
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
         vk.users.get()
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
