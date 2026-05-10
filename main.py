@@ -11,6 +11,26 @@ import asyncpg
 SUCCESS_GIF_URL = "https://i.gifer.com/LRP3.gif"
 ERROR_GIF_URL = "https://i.gifer.com/84OP.gif"
 
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+
+async def send_discord_log(title: str, description: str, color: int = 0x00ff00, fields: list = None):
+    if not DISCORD_WEBHOOK_URL:
+        return
+    try:
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat(),
+            "footer": {"text": "eSim бот"}
+        }
+        if fields:
+            embed["fields"] = [{"name": f[0], "value": f[1], "inline": f[2] if len(f) > 2 else False} for f in fields]
+        async with aiohttp.ClientSession() as session:
+            await session.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
+    except Exception as e:
+        logging.warning(f"Discord log error: {e}")
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -1568,7 +1588,8 @@ async def add_tg_code(message: types.Message, state: FSMContext):
             ],
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
-        await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
+        await message.answer(f"✅ Аккаунт {name} добавлен!")
+        await message.answer("Выберите действие:", reply_markup=kb)
         await client.disconnect()
         await state.clear()
     except SessionPasswordNeededError:
