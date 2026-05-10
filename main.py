@@ -73,7 +73,6 @@ SAFETY_CONFIG = {
 db_pool = None
 
 # Глобальный словарь для игр (обход FSM). Здесь будут храниться данные для куба, баскетбола и т.д.
-user_games = {}
 
 async def init_db():
     global db_pool
@@ -174,6 +173,15 @@ async def init_db():
                 day_count INTEGER
             )
         ''')
+
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                status TEXT DEFAULT 'open',
+                created_at BIGINT
+            )
+        ''')
         # Добавляем колонку registered_at, если её нет
         await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
@@ -214,10 +222,13 @@ async def update_balance(tg_id: int, delta: float):
         await conn.execute("UPDATE users SET balance = balance + $1 WHERE tg_id=$2", delta, tg_id)
 
 # ----- Telegram аккаунты -----
-async def add_tg_account(owner_tg_id: int, phone: str, session_file: str, name: str):
+async def add_tg_account(owner_tg_id: int, phone: str, session_file: str, name: str) -> int:
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO tg_accounts (owner_tg_id, phone, session_file, name, last_used) VALUES ($1,$2,$3,$4,$5)",
-                           owner_tg_id, phone, session_file, name, int(time.time()))
+        row = await conn.fetchrow(
+            "INSERT INTO tg_accounts (owner_tg_id, phone, session_file, name, last_used) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            owner_tg_id, phone, session_file, name, int(time.time())
+        )
+        return row["id"]
 
 async def get_user_tg_accounts(owner_tg_id: int):
     async with db_pool.acquire() as conn:
@@ -238,9 +249,13 @@ async def deactivate_tg_account(owner_tg_id: int, account_id: int):
         await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
 
 # ----- VK аккаунты -----
-async def add_vk_account(owner_tg_id: int, token: str, vk_name: str):
+async def add_vk_account(owner_tg_id: int, token: str, vk_name: str) -> int:
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO vk_accounts (owner_tg_id, token, vk_name, is_active) VALUES ($1,$2,$3,TRUE)", owner_tg_id, token, vk_name)
+        row = await conn.fetchrow(
+            "INSERT INTO vk_accounts (owner_tg_id, token, vk_name, is_active) VALUES ($1,$2,$3,TRUE) RETURNING id",
+            owner_tg_id, token, vk_name
+        )
+        return row["id"]
 
 async def get_user_vk_accounts(owner_tg_id: int):
     async with db_pool.acquire() as conn:
@@ -365,7 +380,6 @@ def main_menu(tg_id: int):
     """Главное меню — золотой стиль"""
     kb = [
         [
-            InlineKeyboardButton(text="🎲 ИГРАТЬ", callback_data="game_menu"),
             InlineKeyboardButton(text="👤 КАБИНЕТ", callback_data="profile")
         ],
         [
@@ -457,18 +471,13 @@ def back_button(callback_data: str):
 # ========== FSM состояния ==========
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
-class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State()
+class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_voice = State(); waiting_confirm = State()
 class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
 class AdminAddBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
 class AdminRemoveBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
 class AdminGiveSubscription(StatesGroup): waiting_user_id = State(); waiting_days = State()
 class Withdraw(StatesGroup): waiting_amount = State(); waiting_wallet = State()
 class Deposit(StatesGroup): waiting_amount = State()
-class GameBet(StatesGroup): waiting_bet = State()
-class GameCube(StatesGroup): waiting_choice = State(); waiting_exact = State(); waiting_range = State()
-class GameBasketball(StatesGroup): waiting_choice = State()
-class GameDarts(StatesGroup): waiting_choice = State()
-class GameFootball(StatesGroup): waiting_choice = State()
 class ManageTG(StatesGroup): waiting_new_avatar = State(); waiting_cloud_password = State(); waiting_code_for_login = State(); waiting_new_name = State(); waiting_new_username = State()
 class TGAction(StatesGroup): waiting_target = State(); waiting_message = State(); waiting_join_link = State(); waiting_photo = State(); waiting_file = State(); waiting_schedule_delay = State()
 class AdminCreatePromocode(StatesGroup): waiting_code = State(); waiting_days = State(); waiting_max_uses = State()
@@ -478,12 +487,12 @@ class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = St
 class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); waiting_select = State()
 class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
 class VKBroadcastState(StatesGroup): waiting_choice = State(); active = State()
+class Support(StatesGroup): waiting_message = State(); waiting_reply = State()
 
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-user_last_game = {}
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if message.chat.type != ChatType.PRIVATE:
@@ -1135,10 +1144,13 @@ async def tg_leave_execute(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("tg_broadcast_"))
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
-    await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите текст рассылки:")
-    await state.set_state(BroadcastTG.waiting_text)
-    await callback.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 ТЕКСТ", callback_data="broadcast_type_text")],
+        [InlineKeyboardButton(text="🎙️ ГОЛОСОВОЕ", callback_data="broadcast_type_voice")],
+        [InlineKeyboardButton(text="🔘 ТЕКСТ + КНОПКА", callback_data="broadcast_type_button")]
+    ])
+    await callback.message.answer("Выберите тип сообщения:", reply_markup=kb)
+    await state.set_state(BroadcastTG.waiting_type)
 
 @dp.message(BroadcastTG.waiting_text)
 async def broadcast_tg_text(message: types.Message, state: FSMContext):
@@ -1247,7 +1259,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         logging.info(f"TG рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
 
         # Отправляем гифку в зависимости от успешности
-        if success_rate >= 80:
+        if success_rate >= 40:
             gif_url = SUCCESS_GIF_URL
             caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
         else:
@@ -1461,7 +1473,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
         logging.info(f"VK рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
 
-        if success_rate >= 80:
+        if success_rate >= 50:
             gif_url = SUCCESS_GIF_URL
             caption = "🎉 *VK РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
         else:
@@ -1517,8 +1529,15 @@ async def add_tg_code(message: types.Message, state: FSMContext):
         await client.sign_in(phone, code)
         me = await client.get_me()
         name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-        await add_tg_account(message.from_user.id, phone, data["session_file"], name)
-        await message.answer(f"✅ Аккаунт {name} добавлен!")
+        acc_id = await add_tg_account(message.from_user.id, phone, data["session_file"], name)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ TG", callback_data="add_tg"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
         await client.disconnect()
         await state.clear()
     except SessionPasswordNeededError:
@@ -1562,8 +1581,16 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         vk = vk_session.get_api()
         user = vk.users.get()[0]
         name = f"{user['first_name']} {user['last_name']}"
-        await add_vk_account(message.from_user.id, token, name)
-        await message.answer(f"✅ VK аккаунт {name} добавлен!")
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        acc_id = await add_vk_account(message.from_user.id, token, name)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
         await state.clear()
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
@@ -1796,400 +1823,10 @@ async def repeat_game(call_or_msg, state, new_bet=None):
             return True
     return False
 
-@dp.callback_query(F.data == "game_menu")
-async def game_menu_callback(callback: types.CallbackQuery):
-    await callback.message.edit_text("🎲 Выберите игру:", reply_markup=game_menu())
-    await callback.answer()
 
-# -------- КУБ ----------
-@dp.callback_query(F.data == "game_cube")
-async def game_cube_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text("🎲 Режимы куба:", reply_markup=cube_menu())
-    await callback.answer()
+# -------- КУБ ---------
 
-@dp.callback_query(F.data.startswith("mode:"))
-async def cube_mode_selected(callback: types.CallbackQuery, state: FSMContext):
-    mode = callback.data.split(":")[1]
-    user_id = callback.from_user.id
-    user_games[user_id] = {"type": "cube", "mode": mode, "bet": None}
-    await callback.message.answer("💰 Введите ставку (мин 0.1$):")
-    await state.set_state(GameBet.waiting_bet)
-    await callback.answer()
-
-# Общий обработчик ставки
-@dp.message(GameBet.waiting_bet)
-async def game_bet(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in user_games or user_games[user_id].get('mode') is None:
-        await message.answer("❌ Сначала выберите игру через меню.")
-        await state.clear()
-        return
-    try:
-        bet = float(message.text.strip())
-        if bet < 0.1:
-            await message.answer("❌ Минимальная ставка 0.1$")
-            return
-        balance = await get_balance(user_id)
-        if bet > balance:
-            await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}$")
-            return
-        user_games[user_id]['bet'] = bet
-        game_type = user_games[user_id]['type']
-        mode = user_games[user_id]['mode']
-
-        if game_type == 'cube':
-            if mode in ('less_more', 'even_odd', '35'):
-                if mode == 'less_more':
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data="choice:less_more:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data="choice:less_more:more")]])
-                elif mode == 'even_odd':
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data="choice:even_odd:even"), InlineKeyboardButton(text="Нечет", callback_data="choice:even_odd:odd")]])
-                else:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data="choice:35:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data="choice:35:lt35")]])
-                await message.answer("Выберите вариант:", reply_markup=kb)
-                await state.set_state(GameCube.waiting_choice)
-                return
-            elif mode == 'exact':
-                await message.answer("Введите число от 1 до 6:")
-                await state.set_state(GameCube.waiting_exact)
-                return
-            elif mode == 'range':
-                await message.answer("Введите диапазон (например, 2-4):")
-                await state.set_state(GameCube.waiting_range)
-                return
-            else:
-                await message.answer("❌ Неизвестный режим куба")
-                await state.clear()
-                return
-        elif game_type == 'basketball':
-            await state.set_state(GameBasketball.waiting_choice)
-            await game_basketball_choice_after_bet(message, state)
-        elif game_type == 'darts':
-            await state.set_state(GameDarts.waiting_choice)
-            await game_darts_choice_after_bet(message, state)
-        elif game_type == 'football':
-            await state.set_state(GameFootball.waiting_choice)
-            await game_football_choice_after_bet(message, state)
-    except:
-        await message.answer("❌ Введите число")
-
-# ---- Кубик: выбор в режимах (less/more, even/odd, 35) ----
-@dp.callback_query(F.data.startswith("choice:"))
-async def cube_choice_handler(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    if user_id not in user_games or user_games[user_id].get('bet') is None:
-        await callback.answer("❌ Ошибка, начните сначала", show_alert=True)
-        await state.clear()
-        return
-    bet = user_games[user_id]['bet']
-    mode = user_games[user_id]['mode']
-    choice_parts = callback.data.split(':')
-    choice = choice_parts[2] if len(choice_parts) > 2 else choice_parts[1]
-
-    msg = await callback.message.answer_dice(emoji="🎲")
-    roll = msg.dice.value
-    await asyncio.sleep(1.2)
-
-    win = False
-    if mode == 'less_more':
-        win = (choice == 'less' and roll <= 3) or (choice == 'more' and roll >= 4)
-    elif mode == 'even_odd':
-        win = (choice == 'even' and roll % 2 == 0) or (choice == 'odd' and roll % 2 == 1)
-    elif mode == '35':
-        win = (choice == 'gt35' and roll > 3.5) or (choice == 'lt35' and roll < 3.5)
-
-    if win:
-        payout = bet * 2
-        await update_balance(user_id, payout)
-        new_balance = await get_balance(user_id)
-        result = (
-            "🎉 *┌────────────────────────────┐* 🎉\n"
-            "   *│        ВЫ ВЫИГРАЛИ!        │*\n"
-            f"   *│      СТАВКА : {bet:.2f}$          │*\n"
-            f"   *│      ВЫИГРЫШ: {payout:.2f}$ ×2      │*\n"
-            f"   *│      БАЛАНС : {new_balance:.2f}$      │*\n"
-            "   *└────────────────────────────┘*\n"
-            f"🎲 *Вам выпало число {roll}*\n"
-            "✨ *Поздравляем! Сыграйте ещё!* ✨"
-        )
-    else:
-        await update_balance(user_id, -bet)
-        new_balance = await get_balance(user_id)
-        result = (
-            "💔 *┌────────────────────────────┐* 💔\n"
-            "   *│         ПРОИГРЫШ :(         │*\n"
-            f"   *│      СТАВКА : {bet:.2f}$          │*\n"
-            f"   *│      ПОТЕРЯНО  : {bet:.2f}$          │*\n"
-            f"   *│      БАЛАНС : {new_balance:.2f}$      │*\n"
-            "   *└────────────────────────────┘*\n"
-            f"🎲 *Выпало число {roll}*\n"
-            "🔄 *Удача придёт в следующий раз!*"
-        )
-
-    # Сохраняем данные для кнопок "ещё раз"
-    user_games[user_id]['last_game_type'] = 'cube'
-    user_games[user_id]['last_bet'] = bet
-    user_games[user_id]['last_cube_mode'] = mode
-
-    await callback.message.answer(result, reply_markup=after_game_menu(), parse_mode="Markdown")
-    await state.clear()
-    await callback.answer()
-
-# ---- Кубик: exact (угадать число) ----
-@dp.message(GameCube.waiting_exact)
-async def cube_exact_handler(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in user_games or user_games[user_id].get('bet') is None:
-        await message.answer("Ошибка, начните сначала")
-        await state.clear()
-        return
-    try:
-        num = int(message.text.strip())
-        if num < 1 or num > 6:
-            raise ValueError
-        bet = user_games[user_id]['bet']
-        msg = await message.answer_dice(emoji="🎲")
-        roll = msg.dice.value
-        await asyncio.sleep(1)
-        if roll == num:
-            payout = bet * 6
-            await update_balance(user_id, payout)
-            new_balance = await get_balance(user_id)
-            result = f"🎲 Выпало {roll}\n✅ УГАДАЛ! Выигрыш: {bet}$ x6 = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-        else:
-            await update_balance(user_id, -bet)
-            new_balance = await get_balance(user_id)
-            result = f"🎲 Выпало {roll}\n❌ НЕ УГАДАЛ. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-        user_games[user_id]['last_game_type'] = 'cube'
-        user_games[user_id]['last_bet'] = bet
-        user_games[user_id]['last_cube_mode'] = 'exact'
-        await message.answer(result, reply_markup=after_game_menu())
-    except:
-        await message.answer("❌ Введите число от 1 до 6")
-        user_last_game[user_id] = {"bet": bet, "mode": "exact"}
-    finally:
-        await state.clear()
-
-# ---- Кубик: диапазон ----
-@dp.message(GameCube.waiting_range)
-async def cube_range_handler(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    if user_id not in user_games or user_games[user_id].get('bet') is None:
-        await message.answer("Ошибка, начните сначала")
-        await state.clear()
-        return
-    try:
-        parts = message.text.strip().split('-')
-        low = int(parts[0]); high = int(parts[1])
-        if low < 1 or high > 6 or low > high:
-            raise ValueError
-        count = high - low + 1
-        if count == 6:
-            coeff = 1.0
-        else:
-            coeff = round(6.0 / count, 1)
-            if coeff < 1.2:
-                coeff = 1.2
-        bet = user_games[user_id]['bet']
-        msg = await message.answer_dice(emoji="🎲")
-        roll = msg.dice.value
-        await asyncio.sleep(1)
-        if low <= roll <= high:
-            payout = bet * coeff
-            await update_balance(user_id, payout)
-            new_balance = await get_balance(user_id)
-            result = f"🎲 Выпало {roll}\n✅ ПОПАЛ! Коэф: {coeff}x, Выигрыш: {bet}$ x{coeff} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-        else:
-            await update_balance(user_id, -bet)
-            new_balance = await get_balance(user_id)
-            result = f"🎲 Выпало {roll}\n❌ МИМО. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-        user_games[user_id]['last_game_type'] = 'cube'
-        user_games[user_id]['last_bet'] = bet
-        user_games[user_id]['last_cube_mode'] = 'range'
-        await message.answer(result, reply_markup=after_game_menu())
-    except:
-        await message.answer("❌ Пример: 2-4")
-        user_last_game[user_id] = {"bet": bet, "mode": "range"}
-    finally:
-        await state.clear()
-
-# -------- БАСКЕТБОЛ ----------
-@dp.callback_query(F.data == "game_basketball")
-async def game_basketball_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text("🏀 Выберите исход:", reply_markup=basketball_menu())
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("basket_"))
-async def game_basketball_start(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    user_games[user_id] = {"type": "basketball", "mode": callback.data, "bet": None}
-    await callback.message.answer("💰 Введите ставку (мин 0.1$):")
-    await state.set_state(GameBet.waiting_bet)
-    await callback.answer()
-
-async def game_basketball_choice_after_bet(message, state, custom_bet=None):
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    if user_id not in user_games:
-        await message.answer("Ошибка, начните заново")
-        return
-    bet = custom_bet if custom_bet is not None else user_games[user_id].get('bet')
-    mode = user_games[user_id]['mode']
-    msg = await message.answer_dice(emoji="🏀")
-    value = msg.dice.value
-    await asyncio.sleep(1)
-    outcomes = {
-        "basket_exact": (value == 5, 7, "🎯 Точное попадание"),
-        "basket_ring": (value == 4, 3, "🏀 Попадание в кольцо"),
-        "basket_miss": (value <= 2, 1.5, "❌ Мимо"),
-        "basket_board": (value == 3, 2.5, "🛡️ Щит")
-    }
-    win, mult, name = outcomes.get(mode, (False, 1, "Неизвестно"))
-    if win:
-        payout = bet * mult
-        await update_balance(user_id, payout)
-        new_balance = await get_balance(user_id)
-        result = f"🏀 {name}! Выигрыш: {bet}$ x{mult} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-    else:
-        await update_balance(user_id, -bet)
-        new_balance = await get_balance(user_id)
-        result = f"🏀 {name} не удалось. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    user_games[user_id]['last_game_type'] = 'basketball'
-    user_games[user_id]['last_bet'] = bet
-    user_games[user_id]['last_basketball_mode'] = mode
-    await message.answer(result, reply_markup=after_game_menu())
-    await state.clear()
-
-# -------- ДАРТС ----------
-@dp.callback_query(F.data == "game_darts")
-async def game_darts_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text("🎯 Выберите исход:", reply_markup=darts_menu())
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("darts_"))
-async def game_darts_start(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    user_games[user_id] = {"type": "darts", "mode": callback.data, "bet": None}
-    await callback.message.answer("💰 Введите ставку (мин 0.1$):")
-    await state.set_state(GameBet.waiting_bet)
-    await callback.answer()
-
-async def game_darts_choice_after_bet(message, state, custom_bet=None):
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    if user_id not in user_games:
-        await message.answer("Ошибка, начните заново")
-        return
-    bet = custom_bet if custom_bet is not None else user_games[user_id].get('bet')
-    mode = user_games[user_id]['mode']
-    msg = await message.answer_dice(emoji="🎯")
-    value = msg.dice.value
-    await asyncio.sleep(1)
-    outcomes = {
-        "darts_bullseye": (value == 6, 10, "🎯 Яблочко"),
-        "darts_20": (value == 5, 5, "🎯 20")
-    }
-    win, mult, name = outcomes.get(mode, (False, 1, "Неизвестно"))
-    if win:
-        payout = bet * mult
-        await update_balance(user_id, payout)
-        new_balance = await get_balance(user_id)
-        result = f"🎯 {name}! Выигрыш: {bet}$ x{mult} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-    else:
-        await update_balance(user_id, -bet)
-        new_balance = await get_balance(user_id)
-        result = f"🎯 {name} не выпало. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    user_games[user_id]['last_game_type'] = 'darts'
-    user_games[user_id]['last_bet'] = bet
-    user_games[user_id]['last_darts_mode'] = mode
-    await message.answer(result, reply_markup=after_game_menu())
-    await state.clear()
-
-# -------- ФУТБОЛ ----------
-@dp.callback_query(F.data == "game_football")
-async def game_football_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text("⚽ Выберите исход:", reply_markup=football_menu())
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("foot_"))
-async def game_football_start(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    user_games[user_id] = {"type": "football", "mode": callback.data, "bet": None}
-    await callback.message.answer("💰 Введите ставку (мин 0.1$):")
-    await state.set_state(GameBet.waiting_bet)
-    await callback.answer()
-
-async def game_football_choice_after_bet(message, state, custom_bet=None):
-    user_id = message.from_user.id if hasattr(message, 'from_user') else message.chat.id
-    if user_id not in user_games:
-        await message.answer("Ошибка, начните заново")
-        return
-    bet = custom_bet if custom_bet is not None else user_games[user_id].get('bet')
-    mode = user_games[user_id]['mode']
-    msg = await message.answer_dice(emoji="⚽")
-    value = msg.dice.value
-    await asyncio.sleep(1)
-    outcomes = {
-        "foot_nine": (value == 5, 8, "⚽ Гол в девятку"),
-        "foot_target": (value == 4, 3, "⚽ Гол в створ"),
-        "foot_miss": (value <= 2, 1.5, "❌ Мимо"),
-        "foot_post": (value == 3, 5, "🥅 Штанга/перекладина")
-    }
-    win, mult, name = outcomes.get(mode, (False, 1, "Неизвестно"))
-    if win:
-        payout = bet * mult
-        await update_balance(user_id, payout)
-        new_balance = await get_balance(user_id)
-        result = f"⚽ {name}! Выигрыш: {bet}$ x{mult} = {payout:.2f}$\n💰 Баланс: {new_balance:.2f}$"
-    else:
-        await update_balance(user_id, -bet)
-        new_balance = await get_balance(user_id)
-        result = f"⚽ {name} не забит. Проигрыш: {bet}$\n💰 Баланс: {new_balance:.2f}$"
-    user_games[user_id]['last_game_type'] = 'football'
-    user_games[user_id]['last_bet'] = bet
-    user_games[user_id]['last_football_mode'] = mode
-    await message.answer(result, reply_markup=after_game_menu())
-    await state.clear()
-
-# -------- КНОПКИ ПОСЛЕ ИГРЫ ----------
-@dp.callback_query(F.data == "again")
-async def again_game(callback: types.CallbackQuery, state: FSMContext):
-    await repeat_game(callback, state)
-
-@dp.callback_query(F.data == "inc_bet")
-async def inc_bet(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    if user_id not in user_games or 'last_bet' not in user_games[user_id]:
-        await callback.answer("❌ Нет активной игры", show_alert=True)
-        return
-    old_bet = user_games[user_id]['last_bet']
-    new_bet = old_bet + 1.0
-    balance = await get_balance(user_id)
-    if new_bet > balance:
-        await callback.answer(f"❌ Не хватает. Баланс: {balance:.2f}$", show_alert=True)
-        return
-    await repeat_game(callback, state, new_bet)
-    await callback.answer()
-
-@dp.callback_query(F.data == "dec_bet")
-async def dec_bet(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    if user_id not in user_games or 'last_bet' not in user_games[user_id]:
-        await callback.answer("❌ Нет активной игры", show_alert=True)
-        return
-    old_bet = user_games[user_id]['last_bet']
-    new_bet = old_bet - 1.0
-    if new_bet < 0.1:
-        new_bet = 0.1
-    await repeat_game(callback, state, new_bet)
-    await callback.answer()
-
-@dp.callback_query(F.data == "all_in")
-async def all_in(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    balance = await get_balance(user_id)
-    if balance < 0.1:
-        await callback.answer("❌ Баланс слишком мал для игры", show_alert=True)
-        return
-    await repeat_game(callback, state, balance)
-    await callback.answer()# ========== АДМИН-ПАНЕЛЬ ==========
+# ========== АДМИН-ПАНЕЛЬ ==========
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -3603,6 +3240,16 @@ async def vk_accounts_list(user_id: int):
     kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+async def send_discord_notification(title, description, color=0x00ff00):
+    if not DISCORD_WEBHOOK_URL:
+        return
+    async with aiohttp.ClientSession() as session:
+        webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL, rate_limit_retry=True)
+        embed = DiscordEmbed(title=title, description=description, color=color)
+        webhook.add_embed(embed)
+        await session.post(webhook.url, json=webhook.json)
+
 
 # ========== ЗАПУСК ==========
 async def main():
