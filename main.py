@@ -30,6 +30,7 @@ import aiohttp
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 
+
 logging.basicConfig(level=logging.INFO)
 
 # ========== КОНФИГ (переменные окружения) ==========
@@ -507,7 +508,7 @@ class VKManage(StatesGroup): waiting_new_name = State(); waiting_new_status = St
 class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); waiting_select = State()
 class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
 class VKBroadcastState(StatesGroup): waiting_choice = State(); active = State()
-class Support(StatesGroup): waiting_message = State(); waiting_reply = State()
+class Support(StatesGroup): waiting_message = State(); waiting_reply = State(); waiting_question = State()
 
 
 bot = Bot(token=BOT_TOKEN)
