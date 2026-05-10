@@ -1541,7 +1541,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         )
         # --------------------
 
-        if success_rate >= 80:
+        if success_rate >= 50:
             gif_url = SUCCESS_GIF_URL
             caption = "🎉 *VK РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
         else:
