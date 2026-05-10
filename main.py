@@ -1827,7 +1827,7 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer("🔑 Введите токен VK (access_token):")
-    await state.set_state(AddVK.waiting_token)  # ЭТО КЛЮЧЕВОЕ
+    await state.set_state(AddVK.waiting_token)   # ← ЭТО ОБЯЗАТЕЛЬНО
     await callback.answer()
 
 @dp.message(AddVK.waiting_token)
