@@ -13,7 +13,7 @@ ERROR_GIF_URL = "https://i.gifer.com/84OP.gif"
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
-async def send_discord_log(title: str, description: str, color: int = 0x00ff00, fields: list = None):
+async def send_discord_log(title: str, description: str, color: int = 0x00ff00):
     if not DISCORD_WEBHOOK_URL:
         return
     try:
@@ -24,8 +24,6 @@ async def send_discord_log(title: str, description: str, color: int = 0x00ff00, 
             "timestamp": datetime.utcnow().isoformat(),
             "footer": {"text": "eSim бот"}
         }
-        if fields:
-            embed["fields"] = [{"name": f[0], "value": f[1], "inline": f[2] if len(f) > 2 else False} for f in fields]
         async with aiohttp.ClientSession() as session:
             await session.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]})
     except Exception as e:
@@ -1544,13 +1542,11 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
-async def add_tg_start(callback: types.CallbackQuery, state: FSMContext, cancel_button=None):
+async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await state.update_data(action="add_tg")  # запомним действие
-    await callback.answer("❌ Нужна подписка!", show_alert=True)
-    await callback.message.answer("⚠️ Введите номер телефона (+79991234567):", reply_markup=cancel_button())
+    await callback.message.answer("📞 Введите номер телефона (+79991234567):")
     await state.set_state(AddTG.waiting_phone)
     await callback.answer()
 
@@ -1629,10 +1625,7 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer(
-        "🔑 Введите токен VK (access_token):",
-        reply_markup=cancel_button()
-    )
+    await callback.message.answer("🔑 Введите токен VK (access_token):")
     await state.set_state(AddVK.waiting_token)
     await callback.answer()
 
