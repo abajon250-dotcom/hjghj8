@@ -1086,9 +1086,10 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             elif "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             elif "permission" in err_str:
-                await status_msg.edit_text(f"❌ Недостаточно прав. Проверьте токен аккаунта {vk_name}.")
-                await state.clear()
-                return
+                # Недостаточно прав – просто пропускаем этот аккаунт и продолжаем
+                skipped += 1
+                logging.warning(f"Аккаунт {vk_name} не имеет прав на отправку. Пропускаем.")
+                continue
             else:
                 errors += 1
                 logging.warning(f"VK ошибка для {target}: {e}")
