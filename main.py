@@ -1537,6 +1537,7 @@ async def add_tg_code(message: types.Message, state: FSMContext):
         me = await client.get_me()
         name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
         acc_id = await add_tg_account(message.from_user.id, phone, data["session_file"], name)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ TG", callback_data="add_tg"),
@@ -1561,20 +1562,23 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
     client = data["client"]
     try:
         await client.sign_in(password=password)
-    me = await client.get_me()
-    name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
-    acc_id = await add_tg_account(message.from_user.id, phone, data["session_file"], name)
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ TG", callback_data="add_tg"),
-            InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")
-        ],
-        [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
-    ])
-    await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
-    await client.disconnect()
-    await state.clear()
+        me = await client.get_me()
+        name = f"{me.first_name} {me.last_name or ''}".strip() or me.username or str(me.id)
+        acc_id = await add_tg_account(message.from_user.id, data["phone"], data["session_file"], name)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ TG", callback_data="add_tg"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ Аккаунт {name} добавлен (2FA)!", reply_markup=kb)
+        await client.disconnect()
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
+        await state.clear()
 
 @dp.callback_query(F.data == "add_vk")
 async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1595,18 +1599,21 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         vk_session = vk_api.VkApi(token=token)
         vk = vk_session.get_api()
         user = vk.users.get()[0]
-    name = f"{user['first_name']} {user['last_name']}"
-    acc_id = await add_vk_account(message.from_user.id, token, name)
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
-            InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
-        ],
-        [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
-    ])
-    await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
-    await state.clear()
+        name = f"{user['first_name']} {user['last_name']}"
+        acc_id = await add_vk_account(message.from_user.id, token, name)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await state.clear()
 
 # ========== ПОДПИСКА ==========
 @dp.callback_query(F.data == "buy_sub")
@@ -3288,6 +3295,13 @@ async def cancel_add_account(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("❌ Добавление аккаунта отменено.", reply_markup=None)
     await callback.answer()
+
+@dp.callback_query(F.data == "cancel_add_account")
+async def cancel_add_account(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Добавление аккаунта отменено.")
+    await callback.answer()
+
 
 # ========== ЗАПУСК ==========
 async def main():
