@@ -1,6 +1,6 @@
-aiogram==3.4.1
+aiogram
 telethon
 vk-api
-aiohttp
 asyncpg
+aiohttp
 python-dotenv
