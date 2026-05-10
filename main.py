@@ -610,8 +610,8 @@ async def profile(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "my_accounts")
 async def my_accounts(callback: types.CallbackQuery):
+    await callback.answer()  # критически важно первым делом!
     await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
-    await callback.answer()
 
 @dp.callback_query(F.data == "connect_new_account")
 async def connect_new(callback: types.CallbackQuery):
