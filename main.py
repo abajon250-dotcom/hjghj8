@@ -1,11 +1,17 @@
 import asyncio
 import time
-import os
-import re
-from datetime import datetime
-import random
 import logging
-import asyncpg
+from datetime import datetime
+from aiogram import F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+import vk_api
+
+# Глобальный словарь для хранения данных активной рассылки
+active_broadcasts = {}
+
 
 # Где-то в начале файла (после импортов)
 SUCCESS_GIF_URL = "https://i.gifer.com/LRP3.gif"
@@ -540,6 +546,7 @@ class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
 class VKBroadcastState(StatesGroup): waiting_choice = State(); active = State()
 class Support(StatesGroup): waiting_message = State(); waiting_reply = State(); waiting_question = State()
 class MassVK(StatesGroup): waiting_tokens = State()
+class CaptchaSolve(StatesGroup): waiting = State()
 
 
 bot = Bot(token=BOT_TOKEN)
@@ -1404,11 +1411,19 @@ async def vk_delete(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("vk_broadcast_"))
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-    acc_id = int(callback.data.split("_")[2])
-    await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Текст рассылки:")
-    await state.set_state(BroadcastVK.waiting_text)
-    await callback.answer()
+    parts = callback.data.split("_")
+    # Обычная рассылка: vk_broadcast_<acc_id>
+    if len(parts) == 3 and parts[2].isdigit():
+        acc_id = int(parts[2])
+        await state.update_data(acc_id=acc_id)
+        await callback.message.answer("📝 Введите текст рассылки:")
+        await state.set_state(BroadcastVK.waiting_text)
+        await callback.answer()
+    # Рассылка по шаблону: vk_broadcast_template_<acc_id> (обрабатывается отдельно)
+    elif len(parts) >= 4 and parts[2] == "template":
+        await callback.answer("Используйте кнопку '📝 Рассылка по шаблону'", show_alert=True)
+    else:
+        await callback.answer("Неверный формат", show_alert=True)
 
 @dp.message(BroadcastVK.waiting_text)
 async def broadcast_vk_text(message: types.Message, state: FSMContext):
@@ -1430,7 +1445,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         if delay < 1:
             delay = 1
         if delay > 10:
-            await message.answer("⚠️ Задержка более 10 сек сильно замедлит рассылку. Рекомендуется 2–5 сек.")
+            await message.answer("⚠️ Задержка более 10 сек сильно замедлит рассылку. Рекомендуется 2-5 сек.")
     except ValueError:
         await message.answer("❌ Нужно число, например 2")
         return
@@ -1454,7 +1469,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
     status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
 
-    # --- Проверка токена ---
+    # Проверка токена
     try:
         vk_session = vk_api.VkApi(token=token)
         vk = vk_session.get_api()
@@ -1464,14 +1479,13 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # --- Сбор контактов ---
+    # Сбор контактов
     try:
         friends = vk.friends.get()["items"]
         convs = vk.messages.getConversations(count=200)["items"]
         chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
         targets = friends + chat_ids
-        total = len(targets)
-        if total == 0:
+        if len(targets) == 0:
             await status_msg.edit_text("❌ Нет получателей (нет друзей или бесед).")
             await state.clear()
             return
@@ -1480,131 +1494,229 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # --- Лимит (по желанию можно задать 100) ---
-    LIMIT = 0  # отправлять не более 100 успешных сообщений, поставьте 0 чтобы отключить
-    if LIMIT > 0 and LIMIT < total:
-        effective_total = LIMIT
-    else:
-        effective_total = total
+    # Инициализируем данные рассылки
+    user_id = message.from_user.id
+    active_broadcasts[user_id] = {
+        "acc_id": acc_id,
+        "token": token,
+        "vk_name": vk_name,
+        "text": text,
+        "delay": delay,
+        "targets": targets,
+        "current_index": 0,
+        "sent": 0,
+        "errors": 0,
+        "skipped": 0,
+        "start_time": time.time(),
+        "status_msg": status_msg,
+        "original_message": message,
+        "vk": vk
+    }
 
-    # --- Расчёт времени окончания ---
-    estimated_seconds = effective_total * delay
-    finish_time = time.time() + estimated_seconds
+    # Запускаем отправку
+    await run_vk_broadcast(user_id)
+    await state.clear()
+
+
+async def run_vk_broadcast(user_id: int):
+    """Основной цикл отправки с поддержкой паузы на капчу"""
+    data = active_broadcasts.get(user_id)
+    if not data:
+        return
+
+    acc_id = data["acc_id"]
+    vk = data["vk"]
+    vk_name = data["vk_name"]
+    text = data["text"]
+    delay = data["delay"]
+    targets = data["targets"]
+    idx = data["current_index"]
+    sent = data["sent"]
+    errors = data["errors"]
+    skipped = data["skipped"]
+    start_time = data["start_time"]
+    status_msg = data["status_msg"]
+    original_message = data["original_message"]
+
+    total = len(targets)
+
+    # Прогноз времени
+    remaining = total - idx
+    estimated_sec = remaining * delay
+    finish_time = time.time() + estimated_sec
     finish_time_str = datetime.fromtimestamp(finish_time).strftime("%H:%M:%S")
 
     await status_msg.edit_text(
-        f"🚀 *Рассылка VK запущена*\n"
-        f"👥 Всего контактов: {total}\n"
-        f"📤 Будет отправлено (лимит): {effective_total}\n"
-        f"⏱️ Задержка: {delay} сек\n"
-        f"⏳ Ожидаемое завершение: {finish_time_str}\n\n"
-        f"✅ Отправлено: 0/{effective_total} (0%)"
+        f"🚀 *Рассылка VK запущена*\n👥 Всего: {total}\n📤 Отправлено: {sent}\n⏱️ Задержка: {delay} сек\n⏳ Завершится около: {finish_time_str}\n\n➡️ Текущий: {idx+1}/{total}"
     )
 
-    sent = 0
-    errors = 0
-    skipped = 0
-    start_time = time.time()
-    last_update = start_time
-
-    async def update_progress():
-        nonlocal sent, errors, skipped, effective_total, start_time
-        elapsed = time.time() - start_time
-        processed = sent + errors + skipped
-        percent = (processed / total) * 100 if total else 0
-        speed = sent / elapsed * 60 if elapsed > 0 else 0
-        remaining_sec = (effective_total - sent) / (speed / 60) if speed > 0 else 0
-        remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_sec))
-        finish_at = time.time() + remaining_sec
-        finish_at_str = datetime.fromtimestamp(finish_at).strftime("%H:%M:%S")
-        bar_len = 20
-        filled = int(bar_len * sent / effective_total) if effective_total else 0
-        bar = "🟩" * filled + "⬜" * (bar_len - filled)
-        await status_msg.edit_text(
-            f"📤 *Рассылка VK в процессе*\n\n"
-            f"👥 Всего: {total}\n"
-            f"✅ Отправлено: {sent}/{effective_total}\n"
-            f"❌ Ошибок: {errors}\n"
-            f"⏭️ Пропущено: {skipped}\n"
-            f"📊 Прогресс: {percent:.1f}%\n"
-            f"{bar}\n"
-            f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-            f"⏳ Осталось: {remaining_str}\n"
-            f"🕒 Завершится около: {finish_at_str}",
-            parse_mode="Markdown"
-        )
-
-    # --- Основной цикл ---
-    for idx, target in enumerate(targets):
-        if sent >= effective_total:
-            break
-
-        # Проверка аккаунта каждые 100 итераций
-        if idx > 0 and idx % 100 == 0:
-            try:
-                vk.users.get()
-            except Exception as e:
-                await status_msg.edit_text(f"❌ Аккаунт VK потерял доступ во время рассылки. Остановлено.\nОшибка: {e}")
-                await state.clear()
-                return
-
+    for i in range(idx, total):
+        target = targets[i]
         try:
             if isinstance(target, int):
                 vk.messages.send(user_id=target, message=text, random_id=0)
             else:
                 vk.messages.send(peer_id=target, message=text, random_id=0)
             sent += 1
-        except Exception as e:
-            err_str = str(e).lower()
-            if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "901" in err_str:
+        except vk_api.exceptions.ApiError as e:
+            error_str = str(e).lower()
+            if "captcha needed" in error_str:
+                captcha_sid = getattr(e, 'captcha_sid', None)
+                captcha_img = getattr(e, 'captcha_img', None)
+                if captcha_sid and captcha_img:
+                    # Сохраняем прогресс
+                    data["current_index"] = i
+                    data["sent"] = sent
+                    data["errors"] = errors
+                    data["skipped"] = skipped
+                    active_broadcasts[user_id] = data
+
+                    # Запрашиваем капчу у пользователя
+                    await original_message.answer_photo(
+                        photo=captcha_img,
+                        caption=f"🔐 *Требуется капча для аккаунта {vk_name}*\nВведите код с картинки:",
+                        parse_mode="Markdown"
+                    )
+                    # Сохраняем данные капчи
+                    captcha_storage[user_id] = {
+                        "sid": captcha_sid,
+                        "target": target,
+                        "text": text,
+                        "vk": vk,
+                        "user_id": user_id
+                    }
+                    return  # ждём ответа пользователя
+                else:
+                    errors += 1
+            elif "user deactivated" in error_str or "cannot send" in error_str or "access denied" in error_str or "privacy settings" in error_str:
                 skipped += 1
+            elif "permission" in error_str:
+                await status_msg.edit_text(f"❌ Недостаточно прав. Проверьте токен аккаунта {vk_name}.")
+                await finish_vk_broadcast(user_id)
+                return
             else:
                 errors += 1
-            logging.warning(f"VK ошибка для {target}: {e}")
+                logging.warning(f"VK ошибка для {target}: {e}")
+        except Exception as e:
+            errors += 1
+            logging.warning(f"Неизвестная ошибка VK: {e}")
 
+        # Пауза
         await asyncio.sleep(delay)
 
-        if time.time() - last_update >= 5:
-            await update_progress()
-            last_update = time.time()
+        # Обновляем прогресс каждые 10 отправок
+        if i % 10 == 0 or i == total - 1:
+            elapsed = time.time() - start_time
+            processed = sent + errors + skipped
+            percent = (processed / total) * 100
+            speed = sent / elapsed * 60 if elapsed > 0 else 0
+            remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+            bar_len = 20
+            filled = int(bar_len * sent / total)
+            bar = "🟩" * filled + "⬜" * (bar_len - filled)
+            await status_msg.edit_text(
+                f"📤 *Рассылка VK в процессе*\n\n"
+                f"👥 Всего: {total}\n"
+                f"✅ Отправлено: {sent}\n"
+                f"❌ Ошибок: {errors}\n"
+                f"⏭️ Пропущено: {skipped}\n"
+                f"📊 Прогресс: {percent:.1f}%\n"
+                f"{bar}\n"
+                f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+                f"⏳ Осталось: {remaining_sec:.0f} сек",
+                parse_mode="Markdown"
+            )
 
-    # --- Финальный отчёт ---
+        # Сохраняем прогресс
+        data["current_index"] = i + 1
+        data["sent"] = sent
+        data["errors"] = errors
+        data["skipped"] = skipped
+        active_broadcasts[user_id] = data
+
+    # Все сообщения отправлены
+    await finish_vk_broadcast(user_id)
+
+
+async def finish_vk_broadcast(user_id: int):
+    """Завершает рассылку, отправляет отчёт и гифку"""
+    data = active_broadcasts.pop(user_id, None)
+    if not data:
+        return
+    total = len(data["targets"])
+    sent = data["sent"]
+    errors = data["errors"]
+    skipped = data["skipped"]
+    start_time = data["start_time"]
+    status_msg = data["status_msg"]
+    original_message = data["original_message"]
+    vk_name = data["vk_name"]
+
     total_time = time.time() - start_time
     total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
-    success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) > 0 else 0
+    success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
+
     final_report = (
         f"✅ *Рассылка VK завершена*\n"
         f"📤 Отправлено: {sent}\n"
         f"❌ Ошибок: {errors}\n"
-        f"⏭️ Пропущено (недоступно): {skipped}\n"
+        f"⏭️ Пропущено: {skipped}\n"
         f"📈 Успешность: {success_rate:.1f}%\n"
         f"⏱️ Затрачено: {total_time_str}"
     )
     await status_msg.edit_text(final_report, parse_mode="Markdown")
 
-    # --- Отправка гифки (надёжный способ) ---
+    # Отправка гифки
     gif_url = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
     caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉" if errors == 0 else "⚠️ *РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
-
-    # Пробуем отправить гифку, если не получается – отправляем просто текст
     try:
-        await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
-    except Exception as gif_err:
-        logging.warning(f"Гифка не отправилась: {gif_err}. Отправляю текст.")
-        await message.answer(caption, parse_mode="Markdown")
+        await original_message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
+    except:
+        await original_message.answer(caption, parse_mode="Markdown")
 
-    # --- Discord лог ---
+    # Лог в Discord
     await send_discord_log(
         title="📘 VK рассылка завершена",
-        description=(
-            f"**Аккаунт:** {vk_name}\n"
-            f"**Отправлено:** {sent}/{effective_total}\n"
-            f"**Ошибок:** {errors}\n"
-            f"**Успешность:** {success_rate:.1f}%"
-        ),
+        description=f"**Аккаунт:** {vk_name}\n**Отправлено:** {sent}\n**Ошибок:** {errors}\n**Успешность:** {success_rate:.1f}%",
         color=0x00ff00 if success_rate > 70 else 0xffaa00
     )
-    await state.clear()
+
+
+# Глобальный словарь для временных данных капчи
+captcha_storage = {}
+
+@dp.message()
+async def handle_captcha_input(message: types.Message):
+    """Обрабатывает ввод капчи пользователем"""
+    user_id = message.from_user.id
+    if user_id not in captcha_storage:
+        return
+    code = message.text.strip()
+    cap_data = captcha_storage.pop(user_id)
+
+    try:
+        vk = cap_data["vk"]
+        target = cap_data["target"]
+        text = cap_data["text"]
+        sid = cap_data["sid"]
+
+        if isinstance(target, int):
+            vk.messages.send(user_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        else:
+            vk.messages.send(peer_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        await message.answer("✅ Капча решена! Продолжаю рассылку.")
+        # Возобновляем рассылку
+        if user_id in active_broadcasts:
+            await run_vk_broadcast(user_id)
+        else:
+            await message.answer("❌ Рассылка не активна. Запустите заново.")
+    except vk_api.exceptions.ApiError as e:
+        if "captcha needed" in str(e).lower():
+            # Неверный код – возвращаем обратно
+            captcha_storage[user_id] = cap_data
+            await message.answer("❌ Неверный код. Введите снова:")
+        else:
+            await message.answer(f"❌ Ошибка: {e}")
 
 # ========== ПОДКЛЮЧЕНИЕ НОВЫХ АККАУНТОВ ==========
 @dp.callback_query(F.data == "add_tg")
@@ -3607,6 +3719,261 @@ async def clean_invalid_vk_accounts(user_id: int) -> int:
             await delete_vk_account(user_id, row["id"])
             deleted += 1
     return deleted
+
+async def run_vk_broadcast(user_id: int):
+    data = active_broadcasts.get(user_id)
+    if not data:
+        return
+
+    acc_id = data["acc_id"]
+    token = data["token"]
+    vk_name = data["vk_name"]
+    text = data["text"]
+    delay = data["delay"]
+    targets = data["targets"]
+    start_index = data["current_index"]
+    sent = data["sent"]
+    errors = data["errors"]
+    skipped = data["skipped"]
+    start_time = data["start_time"]
+    status_msg = data["status_msg"]
+    original_message = data["original_message"]
+    vk = data["vk"]
+
+    total = len(targets)
+    if start_index >= total:
+        # Рассылка уже завершена
+        await finish_vk_broadcast(user_id)
+        return
+
+    # Прогноз времени
+    remaining = total - start_index
+    estimated_sec = remaining * delay
+    finish_time = time.time() + estimated_sec
+    finish_time_str = datetime.fromtimestamp(finish_time).strftime("%H:%M:%S")
+
+    # Обновляем стартовое сообщение
+    await status_msg.edit_text(
+        f"🚀 *Рассылка VK запущена*\n"
+        f"👥 Всего: {total}\n"
+        f"📤 Отправлено: {sent}\n"
+        f"⏱️ Задержка: {delay} сек\n"
+        f"⏳ Завершится около: {finish_time_str}\n\n"
+        f"➡️ Текущий: {start_index+1}/{total}"
+    )
+
+    # Цикл отправки
+    for idx in range(start_index, total):
+        target = targets[idx]
+        try:
+            if isinstance(target, int):
+                vk.messages.send(user_id=target, message=text, random_id=0)
+            else:
+                vk.messages.send(peer_id=target, message=text, random_id=0)
+            sent += 1
+        except vk_api.exceptions.ApiError as e:
+            error_str = str(e).lower()
+            # Капча!
+            if "captcha needed" in error_str:
+                captcha_sid = getattr(e, 'captcha_sid', None)
+                captcha_img = getattr(e, 'captcha_img', None)
+                if captcha_sid and captcha_img:
+                    # Сохраняем состояние паузы
+                    data["current_index"] = idx
+                    data["sent"] = sent
+                    data["errors"] = errors
+                    data["skipped"] = skipped
+                    active_broadcasts[user_id] = data
+
+                    # Отправляем капчу пользователю
+                    await original_message.answer_photo(
+                        photo=captcha_img,
+                        caption=f"🔐 *Требуется капча для аккаунта {vk_name}*\nВведите код с картинки:",
+                        parse_mode="Markdown"
+                    )
+                    # Запоминаем данные капчи
+                    captcha_storage[user_id] = {
+                        "sid": captcha_sid,
+                        "target": target,
+                        "message_text": text,
+                        "idx": idx,
+                        "vk": vk
+                    }
+                    # Устанавливаем состояние ожидания капчи
+                    await original_message.bot.send_message(
+                        user_id,
+                        "Ожидаю ввод капчи. Пожалуйста, введите код с картинки:"
+                    )
+                    # Здесь нужно переключить состояние пользователя
+                    # Для этого используем FSM через диспетчер
+                    dp = Dispatcher.get_current()
+                    await dp.fsm.set_state(user_id, state=CaptchaSolve.waiting)
+                    return  # прерываем текущую рассылку, ждём ответа пользователя
+                else:
+                    errors += 1
+                    logging.error(f"Капча без данных: {e}")
+            elif "user deactivated" in error_str or "cannot send" in error_str or "access denied" in error_str or "privacy settings" in error_str:
+                skipped += 1
+            elif "permission" in error_str:
+                await status_msg.edit_text(f"❌ Недостаточно прав. Проверьте токен аккаунта {vk_name}.")
+                await finish_vk_broadcast(user_id)
+                return
+            else:
+                errors += 1
+                logging.warning(f"VK ошибка для {target}: {e}")
+        except Exception as e:
+            errors += 1
+            logging.warning(f"Неизвестная ошибка VK: {e}")
+
+        await asyncio.sleep(delay)
+
+        # Обновляем прогресс каждые 5 секунд или каждые 10 сообщений
+        if (idx - start_index) % 10 == 0 or (idx == total-1):
+            elapsed = time.time() - start_time
+            processed = sent + errors + skipped
+            percent = (processed / total) * 100 if total else 0
+            speed = sent / elapsed * 60 if elapsed > 0 else 0
+            remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+            remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_sec))
+            bar_len = 20
+            filled = int(bar_len * sent / total) if total else 0
+            bar = "🟩" * filled + "⬜" * (bar_len - filled)
+            await status_msg.edit_text(
+                f"📤 *Рассылка VK в процессе*\n\n"
+                f"👥 Всего: {total}\n"
+                f"✅ Отправлено: {sent}/{remaining+ sent}\n"
+                f"❌ Ошибок: {errors}\n"
+                f"⏭️ Пропущено: {skipped}\n"
+                f"📊 Прогресс: {percent:.1f}%\n"
+                f"{bar}\n"
+                f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+                f"⏳ Осталось: {remaining_str}",
+                parse_mode="Markdown"
+            )
+        # Обновляем данные в active_broadcasts
+        data["current_index"] = idx + 1
+        data["sent"] = sent
+        data["errors"] = errors
+        data["skipped"] = skipped
+        active_broadcasts[user_id] = data
+
+    # Рассылка завершена
+    await finish_vk_broadcast(user_id)
+
+async def finish_vk_broadcast(user_id: int):
+    data = active_broadcasts.pop(user_id, None)
+    if not data:
+        return
+    total = len(data["targets"])
+    sent = data["sent"]
+    errors = data["errors"]
+    skipped = data["skipped"]
+    start_time = data["start_time"]
+    status_msg = data["status_msg"]
+    original_message = data["original_message"]
+    vk_name = data["vk_name"]
+
+    total_time = time.time() - start_time
+    total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
+    success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) > 0 else 0
+
+    final_report = (
+        f"✅ *Рассылка VK завершена*\n"
+        f"📤 Отправлено: {sent}\n"
+        f"❌ Ошибок: {errors}\n"
+        f"⏭️ Пропущено: {skipped}\n"
+        f"📈 Успешность: {success_rate:.1f}%\n"
+        f"⏱️ Затрачено: {total_time_str}"
+    )
+    await status_msg.edit_text(final_report, parse_mode="Markdown")
+
+    # Гифка
+    gif_url = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
+    caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉" if errors == 0 else "⚠️ *РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
+    try:
+        await original_message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
+    except Exception as gif_err:
+        logging.warning(f"Гифка не отправилась: {gif_err}")
+        await original_message.answer(caption, parse_mode="Markdown")
+
+    # Discord лог
+    await send_discord_log(
+        title="📘 VK рассылка завершена",
+        description=f"**Аккаунт:** {vk_name}\n**Отправлено:** {sent}\n**Ошибок:** {errors}\n**Успешность:** {success_rate:.1f}%",
+        color=0x00ff00 if success_rate > 70 else 0xffaa00
+    )
+
+@dp.message(StateFilter(CaptchaSolve.waiting))
+async def handle_captcha_solution(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    code = message.text.strip()
+    captcha_data = captcha_storage.pop(user_id, None)
+    if not captcha_data:
+        await message.answer("❌ Нет активной капчи для этого аккаунта.")
+        await state.clear()
+        return
+
+    sid = captcha_data["sid"]
+    target = captcha_data["target"]
+    text = captcha_data["message_text"]
+    idx = captcha_data["idx"]
+    vk = captcha_data["vk"]
+
+    try:
+        # Пытаемся отправить сообщение с решением капчи
+        if isinstance(target, int):
+            vk.messages.send(user_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        else:
+            vk.messages.send(peer_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        await message.answer("✅ Капча успешно решена! Продолжаю рассылку.")
+        # Возобновляем рассылку
+        if user_id in active_broadcasts:
+            await run_vk_broadcast(user_id)
+        else:
+            await message.answer("❌ Рассылка не активна. Запустите заново.")
+    except vk_api.exceptions.ApiError as e:
+        if "captcha needed" in str(e).lower():
+            await message.answer("❌ Неверный код капчи. Попробуйте ещё раз.")
+            # Отправляем капчу заново (данные ещё в captcha_data)
+            captcha_storage[user_id] = captcha_data
+            # Повторно отправить картинку? Она уже была. Просто просим ввести код.
+            await message.answer("Введите правильный код с картинки:")
+            return
+        else:
+            await message.answer(f"❌ Ошибка при отправке: {e}")
+    finally:
+        await state.clear()
+
+@dp.message()
+async def catch_captcha_input(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in captcha_storage:
+        return  # не обрабатываем
+    code = message.text.strip()
+    captcha_data = captcha_storage.pop(user_id)
+    sid = captcha_data["sid"]
+    target = captcha_data["target"]
+    text = captcha_data["message_text"]
+    idx = captcha_data["idx"]
+    vk = captcha_data["vk"]
+
+    try:
+        if isinstance(target, int):
+            vk.messages.send(user_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        else:
+            vk.messages.send(peer_id=target, message=text, random_id=0, captcha_sid=sid, captcha_key=code)
+        await message.answer("✅ Капча решена! Продолжаю рассылку.")
+        if user_id in active_broadcasts:
+            await run_vk_broadcast(user_id)
+        else:
+            await message.answer("❌ Рассылка не активна. Запустите заново.")
+    except vk_api.exceptions.ApiError as e:
+        if "captcha needed" in str(e).lower():
+            # Повторная капча – возвращаем данные
+            captcha_storage[user_id] = captcha_data
+            await message.answer("❌ Неверный код. Введите снова:")
+        else:
+            await message.answer(f"❌ Ошибка: {e}")
 
 # ========== ЗАПУСК ==========
 async def main():
