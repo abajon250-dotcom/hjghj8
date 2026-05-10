@@ -1413,19 +1413,11 @@ async def vk_delete(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("vk_broadcast_"))
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
-    parts = callback.data.split("_")
-    # Обычная рассылка: vk_broadcast_<acc_id>
-    if len(parts) == 3 and parts[2].isdigit():
-        acc_id = int(parts[2])
-        await state.update_data(acc_id=acc_id)
-        await callback.message.answer("📝 Введите текст рассылки:")
-        await state.set_state(BroadcastVK.waiting_text)
-        await callback.answer()
-    # Рассылка по шаблону: vk_broadcast_template_<acc_id> (обрабатывается отдельно)
-    elif len(parts) >= 4 and parts[2] == "template":
-        await callback.answer("Используйте кнопку '📝 Рассылка по шаблону'", show_alert=True)
-    else:
-        await callback.answer("Неверный формат", show_alert=True)
+    acc_id = int(callback.data.split("_")[2])
+    await state.update_data(acc_id=acc_id)
+    await callback.message.answer("Введите текст рассылки:")
+    await state.set_state(BroadcastVK.waiting_text)
+    await callback.answer()
 
 @dp.message(BroadcastVK.waiting_text)
 async def broadcast_vk_text(message: types.Message, state: FSMContext):
@@ -1457,38 +1449,30 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     acc_id = data.get("acc_id")
 
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
+        row = await conn.fetchrow("SELECT token, vk_name FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
             await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
-        token, vk_name, is_active = row["token"], row["vk_name"], row["is_active"]
-
-    if not is_active:
-        await message.answer(f"❌ Аккаунт {vk_name} неактивен. Сделайте его активным в меню.")
-        await state.clear()
-        return
+        token, vk_name = row["token"], row["vk_name"]
 
     status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
-
-    # Проверка токена
+    vk_session = vk_api.VkApi(token=token)
+    vk = vk_session.get_api()
     try:
-        vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()
         vk.users.get()
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
         await state.clear()
         return
 
-    # Сбор контактов
     try:
         friends = vk.friends.get()["items"]
         convs = vk.messages.getConversations(count=200)["items"]
-        chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
-        targets = friends + chat_ids
-        if len(targets) == 0:
-            await status_msg.edit_text("❌ Нет получателей (нет друзей или бесед).")
+        targets = friends + [c["conversation"]["peer"]["id"] for c in convs]
+        total = len(targets)
+        if total == 0:
+            await status_msg.edit_text("❌ Нет получателей (друзей или бесед).")
             await state.clear()
             return
     except Exception as e:
@@ -1496,28 +1480,83 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Инициализируем данные рассылки
-    user_id = message.from_user.id
-    active_broadcasts[user_id] = {
-        "acc_id": acc_id,
-        "token": token,
-        "vk_name": vk_name,
-        "text": text,
-        "delay": delay,
-        "targets": targets,
-        "current_index": 0,
-        "sent": 0,
-        "errors": 0,
-        "skipped": 0,
-        "start_time": time.time(),
-        "status_msg": status_msg,
-        "original_message": message,
-        "vk": vk
-    }
+    # Расчёт времени
+    estimated_seconds = total * delay
+    finish_time = time.time() + estimated_seconds
+    finish_time_str = datetime.fromtimestamp(finish_time).strftime("%H:%M:%S")
+    await status_msg.edit_text(
+        f"🚀 *Рассылка VK запущена*\n"
+        f"👥 Всего контактов: {total}\n"
+        f"⏱️ Задержка: {delay} сек\n"
+        f"⏳ Ожидаемое завершение: {finish_time_str}\n\n"
+        f"✅ Отправлено: 0/{total} (0%)"
+    )
 
-    # Запускаем отправку
-    await run_vk_broadcast(user_id)
+    sent = 0
+    errors = 0
+    start_time = time.time()
+    last_update = start_time
+
+    async def update_progress():
+        nonlocal sent, errors, total, start_time
+        elapsed = time.time() - start_time
+        processed = sent + errors
+        percent = (processed / total) * 100
+        speed = sent / elapsed * 60 if elapsed > 0 else 0
+        remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+        remaining_str = time.strftime("%H ч %M мин %S сек", time.gmtime(remaining_sec))
+        bar_len = 20
+        filled = int(bar_len * sent / total)
+        bar = "🟩" * filled + "⬜" * (bar_len - filled)
+        await status_msg.edit_text(
+            f"📤 *Рассылка VK в процессе*\n\n"
+            f"👥 Всего: {total}\n"
+            f"✅ Отправлено: {sent}/{total}\n"
+            f"❌ Ошибок: {errors}\n"
+            f"📊 Прогресс: {percent:.1f}%\n"
+            f"{bar}\n"
+            f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+            f"⏳ Осталось: {remaining_str}",
+            parse_mode="Markdown"
+        )
+
+    for target in targets:
+        try:
+            if isinstance(target, int):
+                vk.messages.send(user_id=target, message=text, random_id=0)
+            else:
+                vk.messages.send(peer_id=target, message=text, random_id=0)
+            sent += 1
+        except Exception as e:
+            errors += 1
+            logging.warning(f"VK ошибка для {target}: {e}")
+        await asyncio.sleep(delay)
+        if time.time() - last_update >= 5:
+            await update_progress()
+            last_update = time.time()
+
+    total_time = time.time() - start_time
+    total_time_str = time.strftime("%H ч %M мин %S сек", time.gmtime(total_time))
+    success_rate = (sent / (sent + errors)) * 100 if (sent + errors) > 0 else 0
+    final_report = (
+        f"✅ *Рассылка VK завершена*\n"
+        f"📊 Отправлено: {sent} из {total}\n"
+        f"❌ Ошибок: {errors}\n"
+        f"📈 Успешность: {success_rate:.1f}%\n"
+        f"⏱️ Затрачено: {total_time_str}"
+    )
+    await status_msg.edit_text(final_report, parse_mode="Markdown")
+
+    # Отправка гифки
+    gif_url = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
+    caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉" if errors == 0 else "⚠️ *РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
+    try:
+        await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
+    except Exception:
+        await message.answer(caption, parse_mode="Markdown")
+
     await state.clear()
+
 
 
 async def run_vk_broadcast(user_id: int):
@@ -1839,15 +1878,32 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer(
-        "🔑 **Отправьте VK токен.**\n"
-        "Если токен длинный, просто вставьте его – бот соберёт части автоматически.\n"
-        "Не отправляйте другие сообщения, пока токен не добавится!",
-        parse_mode="Markdown"
-    )
-    await state.update_data(token_parts=[], last_update=time.time(), timer_task=None, parts_count=0)
-    await state.set_state(AddVK.collecting_token)
+    await callback.message.answer("🔑 Введите токен VK (access_token):")
+    await state.set_state(AddVK.waiting_token)
     await callback.answer()
+
+@dp.message(AddVK.waiting_token)
+async def add_vk_token(message: types.Message, state: FSMContext):
+    token = message.text.strip()
+    try:
+        vk_session = vk_api.VkApi(token=token)
+        vk = vk_session.get_api()
+        user = vk.users.get()[0]
+        name = f"{user['first_name']} {user['last_name']}"
+        acc_id = await add_vk_account(message.from_user.id, token, name)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+            ],
+            [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
+        ])
+        await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await state.clear()
 
 # Сбор частей токена
 @dp.message(AddVK.collecting_token)
