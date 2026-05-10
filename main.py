@@ -27,6 +27,9 @@ from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyE
 
 import vk_api
 
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+if not ADMIN_ID:
+    raise ValueError("ADMIN_ID not set")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1872,6 +1875,126 @@ async def periodic_account_check():
             for row in rows:
                 await check_vk_account_valid(row["owner_tg_id"], row["id"], row["token"], row["vk_name"])
                 await asyncio.sleep(1)
+
+
+@dp.callback_query(F.data == "admin_give_sub")
+async def admin_give_sub_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("Введите ID пользователя:")
+    await state.set_state(AdminGiveSubscription.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminGiveSubscription.waiting_user_id)
+async def admin_give_sub_user(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        user_id = int(message.text.strip())
+        await state.update_data(user_id=user_id)
+        await message.answer("Введите количество ДНЕЙ подписки:")
+        await state.set_state(AdminGiveSubscription.waiting_days)
+    except:
+        await message.answer("❌ Введите число (ID)")
+
+@dp.message(AdminGiveSubscription.waiting_days)
+async def admin_give_sub_days(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        days = int(message.text.strip())
+        if days <= 0:
+            raise ValueError
+        data = await state.get_data()
+        user_id = data["user_id"]
+        await set_subscription(user_id, days)
+        await message.answer(f"✅ Пользователю {user_id} выдана подписка на {days} дней.")
+        await bot.send_message(user_id, f"🎁 Администратор выдал вам подписку на {days} дней!")
+        await state.clear()
+    except:
+        await message.answer("❌ Введите положительное число")
+
+@dp.callback_query(F.data == "admin_add_balance")
+async def admin_add_balance_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("Введите ID пользователя:")
+    await state.set_state(AdminAddBalance.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminAddBalance.waiting_user_id)
+async def admin_add_balance_user(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        user_id = int(message.text.strip())
+        await state.update_data(user_id=user_id)
+        await message.answer("Введите сумму пополнения (в долларах):")
+        await state.set_state(AdminAddBalance.waiting_amount)
+    except:
+        await message.answer("❌ Введите число (ID)")
+
+@dp.message(AdminAddBalance.waiting_amount)
+async def admin_add_balance_amount(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            raise ValueError
+        data = await state.get_data()
+        user_id = data["user_id"]
+        await update_balance(user_id, amount)
+        await message.answer(f"✅ Пользователю {user_id} начислено {amount}$")
+        await bot.send_message(user_id, f"💰 Вам начислено {amount}$")
+        await state.clear()
+    except:
+        await message.answer("❌ Введите положительное число")
+
+@dp.callback_query(F.data == "admin_remove_balance")
+async def admin_remove_balance_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("Введите ID пользователя:")
+    await state.set_state(AdminRemoveBalance.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminRemoveBalance.waiting_user_id)
+async def admin_remove_balance_user(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        user_id = int(message.text.strip())
+        await state.update_data(user_id=user_id)
+        await message.answer("Введите сумму списания (в долларах):")
+        await state.set_state(AdminRemoveBalance.waiting_amount)
+    except:
+        await message.answer("❌ Введите число (ID)")
+
+@dp.message(AdminRemoveBalance.waiting_amount)
+async def admin_remove_balance_amount(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            raise ValueError
+        data = await state.get_data()
+        user_id = data["user_id"]
+        current = await get_balance(user_id)
+        if current < amount:
+            await message.answer(f"❌ Недостаточно. Баланс: {current}$")
+            return
+        await update_balance(user_id, -amount)
+        await message.answer(f"✅ У пользователя {user_id} списано {amount}$")
+        await bot.send_message(user_id, f"⚠️ С вашего баланса списано {amount}$")
+        await state.clear()
+    except:
+        await message.answer("❌ Введите положительное число")
+
 
 # ------------------- ЗАПУСК -------------------
 async def main():
