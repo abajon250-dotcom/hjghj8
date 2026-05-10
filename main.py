@@ -8,6 +8,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import vk_api
+import os
 
 # Глобальный словарь для хранения данных активной рассылки
 active_broadcasts = {}
