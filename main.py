@@ -3509,9 +3509,10 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
     await state.clear()
 
 async def clean_invalid_vk_accounts(user_id: int):
-    deleted = 0
+    """Удаляет все неактивные (❌) VK аккаунты пользователя"""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
+    deleted = 0
     for row in rows:
         try:
             vk_session = vk_api.VkApi(token=row["token"])
@@ -3519,16 +3520,8 @@ async def clean_invalid_vk_accounts(user_id: int):
             vk.users.get()
         except Exception:
             await delete_vk_account(user_id, row["id"])
-            # Отправляем уведомление (опционально)
             deleted += 1
     return deleted
-
-async def log_vk_deleted(owner_id, vk_name):
-    await send_discord_log(
-        title="⚠️ VK аккаунт удалён",
-        description=f"Владелец: {owner_id}, аккаунт: {vk_name}",
-        color=0xff0000
-    )
 
 @dp.callback_query(F.data == "clean_inactive_vk")
 async def clean_inactive_vk(callback: types.CallbackQuery):
