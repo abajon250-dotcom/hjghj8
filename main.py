@@ -1827,12 +1827,14 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer("🔑 Введите токен VK (access_token):")
-    await state.set_state(AddVK.waiting_token)
+    await state.set_state(AddVK.waiting_token)  # ЭТО КЛЮЧЕВОЕ
     await callback.answer()
 
 @dp.message(AddVK.waiting_token)
 async def add_vk_token(message: types.Message, state: FSMContext):
     token = message.text.strip()
+    print(f"Получен токен от {message.from_user.id}: {token[:10]}...")  # только первые 10 символов
+    await message.answer("🔍 Токен получен, проверяю...")  # временное сообщение
     try:
         vk_session = vk_api.VkApi(token=token)
         vk = vk_session.get_api()
@@ -3946,18 +3948,6 @@ async def handle_captcha_solution(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
-@dp.message()
-async def catch_captcha_input(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in captcha_storage:
-        return  # не обрабатываем
-    code = message.text.strip()
-    captcha_data = captcha_storage.pop(user_id)
-    sid = captcha_data["sid"]
-    target = captcha_data["target"]
-    text = captcha_data["message_text"]
-    idx = captcha_data["idx"]
-    vk = captcha_data["vk"]
 
     try:
         if isinstance(target, int):
