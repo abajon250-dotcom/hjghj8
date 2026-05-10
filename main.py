@@ -490,8 +490,7 @@ def my_accounts_menu():
         [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="list_tg_accounts")],
         [InlineKeyboardButton(text="📘 VK", callback_data="list_vk_accounts")],
         [InlineKeyboardButton(text="➕ ПОДКЛЮЧИТЬ НОВЫЙ", callback_data="connect_new_account")],
-        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")],
-        InlineKeyboardButton(text="📤 МАССОВОЕ ДОБАВЛЕНИЕ", callback_data="mass_add")
+        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
     ])
 
 def connect_new_menu():
