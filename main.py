@@ -529,7 +529,7 @@ def back_button(callback_data: str):
 
 # ========== FSM состояния ==========
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
-class AddVK(StatesGroup): waiting_token = State()
+class AddVK(StatesGroup): waiting_token = State(); collecting_token = State()
 class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State();  waiting_type = State(); waiting_voice = State(); waiting_confirm = State()
 class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
 class AdminAddBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
@@ -4020,7 +4020,7 @@ async def process_vk_token(message: types.Message, state: FSMContext, token: str
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}\nПроверьте токен и повторите.", parse_mode="Markdown")
     finally:
         await state.clear()
-        
+
 # ========== ЗАПУСК ==========
 async def main():
     await init_db()
