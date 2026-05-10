@@ -320,11 +320,7 @@ async def set_active_vk_account(owner_tg_id: int, account_id: int):
 async def delete_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-        await send_discord_log(
-            title="⚠️ Аккаунт деактивирован",
-            description=f"Аккаунт {phone or vk_name} (владелец {owner_tg_id}) автоматически удалён из-за ошибки сессии.",
-            color=0xff0000
-        )
+    # Не отправляем Discord лог здесь, потому что нет имени
 
 # ----- Админские функции -----
 async def get_all_users():
@@ -3513,10 +3509,9 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
     await state.clear()
 
 async def clean_invalid_vk_accounts(user_id: int):
-    """Удаляет все неактивные (❌) VK аккаунты пользователя"""
+    deleted = 0
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
-    deleted = 0
     for row in rows:
         try:
             vk_session = vk_api.VkApi(token=row["token"])
@@ -3524,8 +3519,16 @@ async def clean_invalid_vk_accounts(user_id: int):
             vk.users.get()
         except Exception:
             await delete_vk_account(user_id, row["id"])
+            # Отправляем уведомление (опционально)
             deleted += 1
     return deleted
+
+async def log_vk_deleted(owner_id, vk_name):
+    await send_discord_log(
+        title="⚠️ VK аккаунт удалён",
+        description=f"Владелец: {owner_id}, аккаунт: {vk_name}",
+        color=0xff0000
+    )
 
 @dp.callback_query(F.data == "clean_inactive_vk")
 async def clean_inactive_vk(callback: types.CallbackQuery):
