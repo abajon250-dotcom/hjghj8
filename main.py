@@ -28,6 +28,7 @@ from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyE
 import vk_api
 import aiohttp
 from aiogram.fsm.state import State, StatesGroup
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 
@@ -182,6 +183,16 @@ async def init_db():
                 created_at BIGINT
             )
         ''')
+
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                status TEXT DEFAULT 'open',
+                created_at BIGINT,
+                closed_at BIGINT DEFAULT 0
+            )
+        ''')
         # Добавляем колонку registered_at, если её нет
         await conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
@@ -247,6 +258,11 @@ async def delete_tg_account(owner_tg_id: int, account_id: int):
 async def deactivate_tg_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
+        await send_discord_log(
+            title="⚠️ Аккаунт деактивирован",
+            description=f"Аккаунт {phone or vk_name} (владелец {owner_tg_id}) автоматически удалён из-за ошибки сессии.",
+            color=0xff0000
+        )
 
 # ----- VK аккаунты -----
 async def add_vk_account(owner_tg_id: int, token: str, vk_name: str) -> int:
@@ -270,6 +286,11 @@ async def set_active_vk_account(owner_tg_id: int, account_id: int):
 async def delete_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
+        await send_discord_log(
+            title="⚠️ Аккаунт деактивирован",
+            description=f"Аккаунт {phone or vk_name} (владелец {owner_tg_id}) автоматически удалён из-за ошибки сессии.",
+            color=0xff0000
+        )
 
 # ----- Админские функции -----
 async def get_all_users():
@@ -377,15 +398,11 @@ async def is_subscribed_to_channel(user_id: int) -> bool:
 # ========== ПРЕМИУМ-КЛАВИАТУРЫ ==========
 
 def main_menu(tg_id: int):
-    """Главное меню — золотой стиль"""
     kb = [
-        [
-            InlineKeyboardButton(text="👤 КАБИНЕТ", callback_data="profile")
-        ],
-        [
-            InlineKeyboardButton(text="🔧 АККАУНТЫ", callback_data="my_accounts"),
-            InlineKeyboardButton(text="❓ ПОМОЩЬ", callback_data="help")
-        ],
+        [InlineKeyboardButton(text="👤 КАБИНЕТ", callback_data="profile"),
+         InlineKeyboardButton(text="🔧 АККАУНТЫ", callback_data="my_accounts")],
+        [InlineKeyboardButton(text="❓ ПОМОЩЬ", callback_data="help"),
+         InlineKeyboardButton(text="🆘 ПОДДЕРЖКА", callback_data="support")],
     ]
     if tg_id == ADMIN_ID:
         kb.append([InlineKeyboardButton(text="⚙️ АДМИН", callback_data="admin_panel")])
@@ -1397,6 +1414,11 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         if "invalid token" in str(e).lower():
             await delete_vk_account(message.from_user.id, acc_id)
             await status_msg.edit_text(f"❌ Аккаунт {vk_name} заблокирован. Удалён.")
+            await send_discord_log(
+                title="📨 TG рассылка завершена",
+                description=f"Аккаунт: {acc_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nУспешность: {success_rate:.1f}%",
+                color=0x00ff00 if errors == 0 else 0xffaa00
+            )
             try:
                 await message.answer_animation(animation=ERROR_GIF_URL, caption="⚠️ *АККАУНТ УДАЛЁН*", parse_mode="Markdown")
             except:
@@ -1747,6 +1769,11 @@ async def check_dep_payment(callback: types.CallbackQuery):
         await callback.answer("⏳ Платёж не обработан", show_alert=True)
     else:
         await callback.answer("❌ Ошибка", show_alert=True)
+        await send_discord_log(
+            title="💎 Пополнение баланса",
+            description=f"Пользователь {callback.from_user.id} пополнил баланс на {amount}$",
+            color=0x00ff00
+        )
     await callback.answer()
 
 @dp.callback_query(F.data == "withdraw")
@@ -3301,6 +3328,79 @@ async def cancel_add_account(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("❌ Добавление аккаунта отменено.")
     await callback.answer()
+
+
+async def send_discord_log(title: str, description: str, color: int = 0x00ff00, fields: list = None):
+    """Отправляет красивое сообщение в Discord"""
+    if not DISCORD_WEBHOOK_URL:
+        return
+    try:
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat(),
+            "footer": {"text": "eSim бот"}
+        }
+        if fields:
+            embed["fields"] = [{"name": f[0], "value": f[1], "inline": f[2] if len(f) > 2 else False} for f in fields]
+
+        payload = {"embeds": [embed]}
+        async with aiohttp.ClientSession() as session:
+            await session.post(DISCORD_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        logging.warning(f"Ошибка отправки в Discord: {e}")
+
+@dp.callback_query(F.data == "support")
+async def support_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("✍️ **Напишите ваш вопрос.**\nАдминистратор ответит в этом чате.")
+    await state.set_state(Support.waiting_question)
+    await callback.answer()
+
+@dp.message(Support.waiting_question)
+async def support_send_question(message: types.Message, state: FSMContext):
+    # Создаём тикет
+    async with db_pool.acquire() as conn:
+        ticket_id = await conn.fetchval(
+            "INSERT INTO support_tickets (user_id, created_at) VALUES ($1, $2) RETURNING id",
+            message.from_user.id, int(time.time())
+        )
+    # Уведомляем админа
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 ОТВЕТИТЬ", callback_data=f"reply_ticket_{ticket_id}_{message.from_user.id}")]
+    ])
+    text = f"🆕 **Новый тикет #{ticket_id}**\nОт: {message.from_user.id}\n\n{message.text}"
+    await bot.send_message(ADMIN_ID, text, reply_markup=kb)
+    await message.answer(f"✅ Ваше сообщение отправлено администратору (Тикет #{ticket_id}).\nОжидайте ответа.")
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("reply_ticket_"))
+async def reply_ticket_start(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    ticket_id = int(parts[2])
+    user_id = int(parts[3])
+    await state.update_data(ticket_id=ticket_id, user_id=user_id)
+    await callback.message.answer("✍️ Введите ответ пользователю:")
+    await state.set_state(Support.waiting_reply)
+    await callback.answer()
+
+@dp.message(Support.waiting_reply, F.chat.id == ADMIN_ID)
+async def reply_ticket_send(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    ticket_id = data.get("ticket_id")
+    user_id = data.get("user_id")
+    if not user_id:
+        await message.answer("Ошибка: не найден пользователь.")
+        await state.clear()
+        return
+    # Отправляем ответ пользователю
+    await bot.send_message(user_id, f"🛎️ **Ответ администратора по тикету #{ticket_id}:**\n\n{message.text}")
+    await message.answer("✅ Ответ отправлен пользователю.")
+    # Закрываем тикет (опционально)
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE support_tickets SET status='closed', closed_at=$1 WHERE id=$2", int(time.time()), ticket_id)
+    await state.clear()
 
 
 # ========== ЗАПУСК ==========

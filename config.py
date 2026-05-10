@@ -10,6 +10,6 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 DB_NAME = os.getenv("DB_NAME", "bot.db")
 SESSIONS_DIR = os.getenv("SESSIONS_DIR", "sessions")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
