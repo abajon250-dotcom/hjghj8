@@ -14,6 +14,7 @@ ERROR_GIF_URL = "https://i.gifer.com/84OP.gif"
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 async def send_discord_log(title: str, description: str, color: int = 0x00ff00):
+    print(f"Discord URL: {DISCORD_WEBHOOK_URL}")
     if not DISCORD_WEBHOOK_URL:
         return
     try:
@@ -210,6 +211,20 @@ async def init_db():
                 status TEXT DEFAULT 'open',
                 created_at BIGINT,
                 closed_at BIGINT DEFAULT 0
+            )
+        ''')
+
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS broadcast_history (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                account_id INTEGER,
+                account_type TEXT,
+                text_preview TEXT,
+                total INTEGER,
+                sent INTEGER,
+                errors INTEGER,
+                date BIGINT
             )
         ''')
         # Добавляем колонку registered_at, если её нет
@@ -475,14 +490,16 @@ def my_accounts_menu():
         [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="list_tg_accounts")],
         [InlineKeyboardButton(text="📘 VK", callback_data="list_vk_accounts")],
         [InlineKeyboardButton(text="➕ ПОДКЛЮЧИТЬ НОВЫЙ", callback_data="connect_new_account")],
-        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")]
+        [InlineKeyboardButton(text="◀️ НА ГЛАВНУЮ", callback_data="main_menu")],
+        InlineKeyboardButton(text="📤 МАССОВОЕ ДОБАВЛЕНИЕ", callback_data="mass_add")
     ])
 
 def connect_new_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📱 TELEGRAM", callback_data="add_tg")],
         [InlineKeyboardButton(text="📘 VK", callback_data="add_vk")],
-        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")]
+        [InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")],
+        InlineKeyboardButton(text="📤 МАССОВО VK", callback_data="mass_vk")
     ])
 
 def admin_menu():
@@ -527,6 +544,7 @@ class VKTemplate(StatesGroup): waiting_name = State(); waiting_text = State(); w
 class BroadcastVKTarget(StatesGroup): waiting_target_choice = State()
 class VKBroadcastState(StatesGroup): waiting_choice = State(); active = State()
 class Support(StatesGroup): waiting_message = State(); waiting_reply = State(); waiting_question = State()
+class MassVK(StatesGroup): waiting_tokens = State()
 
 
 bot = Bot(token=BOT_TOKEN)
@@ -1238,7 +1256,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         targets = [d for d in dialogs if d.is_user]
         total = len(targets)
         if total == 0:
-            await status_msg.edit_text("❌ Нет диалогов (пользователей) для рассылки.")
+            await status_msg.edit_text("❌ Нет диалогов для рассылки.")
             return
 
         sent = 0
@@ -1296,36 +1314,38 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         )
         await status_msg.edit_text(final_report, parse_mode="Markdown")
 
-        # Логируем успешность
-        logging.info(f"TG рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
+        # --- Лог в Discord ---
+        await send_discord_log(
+            title="📨 Telegram рассылка завершена",
+            description=(
+                f"**Аккаунт:** {acc_name}\n"
+                f"**Отправлено:** {sent} из {total}\n"
+                f"**Ошибок:** {errors}\n"
+                f"**Успешность:** {success_rate:.1f}%"
+            ),
+            color=0x00ff00 if errors == 0 else 0xffaa00
+        )
+        # --------------------
 
-        # Отправляем гифку в зависимости от успешности
+        # Отправляем гифку (как у тебя было)
         if success_rate >= 40:
             gif_url = SUCCESS_GIF_URL
             caption = "🎉 *РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
         else:
             gif_url = ERROR_GIF_URL
             caption = "⚠️ *РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
-
         try:
             await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
-        except Exception as gif_err:
-            logging.warning(f"Не удалось отправить гифку: {gif_err}")
+        except:
             await message.answer(caption, parse_mode="Markdown")
 
     except (AuthKeyError, UnauthorizedError):
         await deactivate_tg_account(message.from_user.id, acc_id)
         await status_msg.edit_text(f"❌ Аккаунт {phone} деактивирован (сессия устарела).")
-        try:
-            await message.answer_animation(animation=ERROR_GIF_URL, caption="⚠️ *АККАУНТ ДЕАКТИВИРОВАН*", parse_mode="Markdown")
-        except:
-            await message.answer("⚠️ Аккаунт деактивирован")
+        await send_discord_log("⚠️ TG аккаунт деактивирован", f"Аккаунт {phone}\nВладелец: {message.from_user.id}", 0xff0000)
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
-        try:
-            await message.answer_animation(animation=ERROR_GIF_URL, caption="❌ *ОШИБКА РАССЫЛКИ*", parse_mode="Markdown")
-        except:
-            await message.answer("❌ Ошибка рассылки")
+        await send_discord_log("❌ Ошибка TG рассылки", f"Аккаунт {acc_name}\nОшибка: {get_russian_error(e)}", 0xff0000)
     finally:
         await client.disconnect()
         await state.clear()
@@ -1433,15 +1453,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         if "invalid token" in str(e).lower():
             await delete_vk_account(message.from_user.id, acc_id)
             await status_msg.edit_text(f"❌ Аккаунт {vk_name} заблокирован. Удалён.")
-            await send_discord_log(
-                title="📨 TG рассылка завершена",
-                description=f"Аккаунт: {acc_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nУспешность: {success_rate:.1f}%",
-                color=0x00ff00 if errors == 0 else 0xffaa00
-            )
-            try:
-                await message.answer_animation(animation=ERROR_GIF_URL, caption="⚠️ *АККАУНТ УДАЛЁН*", parse_mode="Markdown")
-            except:
-                await message.answer("⚠️ Аккаунт удалён")
+            await send_discord_log("⚠️ VK аккаунт удалён", f"Аккаунт {vk_name}\nВладелец: {message.from_user.id}", 0xff0000)
             await state.clear()
             return
         else:
@@ -1517,15 +1529,25 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         )
         await status_msg.edit_text(final_report, parse_mode="Markdown")
 
-        logging.info(f"VK рассылка: sent={sent}, errors={errors}, success_rate={success_rate:.1f}%")
+        # --- Лог в Discord ---
+        await send_discord_log(
+            title="📘 VK рассылка завершена",
+            description=(
+                f"**Аккаунт:** {vk_name}\n"
+                f"**Отправлено:** {sent} из {total}\n"
+                f"**Ошибок:** {errors}\n"
+                f"**Успешность:** {success_rate:.1f}%"
+            ),
+            color=0x00ff00 if errors == 0 else 0xffaa00
+        )
+        # --------------------
 
-        if success_rate >= 50:
+        if success_rate >= 80:
             gif_url = SUCCESS_GIF_URL
             caption = "🎉 *VK РАССЫЛКА ЗАВЕРШЕНА УСПЕШНО!* 🎉"
         else:
             gif_url = ERROR_GIF_URL
             caption = "⚠️ *VK РАССЫЛКА ЗАВЕРШЕНА С ОШИБКАМИ* ⚠️"
-
         try:
             await message.answer_animation(animation=gif_url, caption=caption, parse_mode="Markdown")
         except:
@@ -1533,10 +1555,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка VK рассылки: {e}")
-        try:
-            await message.answer_animation(animation=ERROR_GIF_URL, caption="❌ *ОШИБКА VK РАССЫЛКИ*", parse_mode="Markdown")
-        except:
-            await message.answer("❌ Ошибка VK рассылки")
+        await send_discord_log("❌ Ошибка VK рассылки", f"Аккаунт {vk_name}\nОшибка: {get_russian_error(e)}", 0xff0000)
     finally:
         await state.clear()
 
@@ -1584,15 +1603,26 @@ async def add_tg_code(message: types.Message, state: FSMContext):
             ],
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
-        await message.answer(f"✅ Аккаунт {name} добавлен!")
-        await message.answer("Выберите действие:", reply_markup=kb)
+        await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
         await client.disconnect()
         await state.clear()
+        # --- Лог в Discord ---
+        await send_discord_log(
+            title="➕ Добавлен Telegram аккаунт",
+            description=f"**Пользователь:** {message.from_user.id}\n**Аккаунт:** {name}\n**Телефон:** {phone}",
+            color=0x00ff00
+        )
+        # --------------------
     except SessionPasswordNeededError:
         await message.answer("🔒 Введите 2FA пароль:")
         await state.set_state(AddTG.waiting_2fa)
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await send_discord_log(
+            title="❌ Ошибка добавления TG аккаунта",
+            description=f"**Пользователь:** {message.from_user.id}\n**Телефон:** {phone}\n**Ошибка:** {get_russian_error(e)}",
+            color=0xff0000
+        )
         await state.clear()
 
 @dp.message(AddTG.waiting_2fa)
@@ -1616,8 +1646,18 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Аккаунт {name} добавлен (2FA)!", reply_markup=kb)
         await client.disconnect()
         await state.clear()
+        await send_discord_log(
+            title="➕ Добавлен Telegram аккаунт (2FA)",
+            description=f"**Пользователь:** {message.from_user.id}\n**Аккаунт:** {name}\n**Телефон:** {data['phone']}",
+            color=0x00ff00
+        )
     except Exception as e:
         await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
+        await send_discord_log(
+            title="❌ Ошибка 2FA TG аккаунта",
+            description=f"**Пользователь:** {message.from_user.id}\n**Телефон:** {data.get('phone', '?')}\n**Ошибка:** {get_russian_error(e)}",
+            color=0xff0000
+        )
         await state.clear()
 
 @dp.callback_query(F.data == "add_vk")
@@ -1648,8 +1688,18 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         ])
         await message.answer(f"✅ VK аккаунт {name} добавлен!", reply_markup=kb)
         await state.clear()
+        await send_discord_log(
+            title="➕ Добавлен VK аккаунт",
+            description=f"**Пользователь:** {message.from_user.id}\n**Аккаунт:** {name}",
+            color=0x00ff00
+        )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await send_discord_log(
+            title="❌ Ошибка добавления VK аккаунта",
+            description=f"**Пользователь:** {message.from_user.id}\n**Ошибка:** {get_russian_error(e)}",
+            color=0xff0000
+        )
         await state.clear()
 
 # ========== ПОДПИСКА ==========
@@ -1776,6 +1826,11 @@ async def check_dep_payment(callback: types.CallbackQuery):
         if callback.from_user.id in deposit_pending:
             amount = deposit_pending[callback.from_user.id]["amount"]
             await update_balance(callback.from_user.id, amount)
+            await send_discord_log(
+                title="💎 Пополнение баланса",
+                description=f"**Пользователь:** `{callback.from_user.id}`\n**Сумма:** {amount}$",
+                color=0x00ff00
+            )
             del deposit_pending[callback.from_user.id]
             await callback.message.edit_text(f"✅ Пополнение на {amount}$ успешно!", reply_markup=main_menu(callback.from_user.id))
         else:
@@ -1784,11 +1839,6 @@ async def check_dep_payment(callback: types.CallbackQuery):
         await callback.answer("⏳ Платёж не обработан", show_alert=True)
     else:
         await callback.answer("❌ Ошибка", show_alert=True)
-        await send_discord_log(
-            title="💎 Пополнение баланса",
-            description=f"Пользователь {callback.from_user.id} пополнил баланс на {amount}$",
-            color=0x00ff00
-        )
     await callback.answer()
 
 @dp.callback_query(F.data == "withdraw")
@@ -1816,73 +1866,27 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
     except:
         await message.answer("❌ Введите число (сумму вывода)")
 
-@dp.message(Withdraw.waiting_wallet)
-async def withdraw_wallet(message: types.Message, state: FSMContext):
-    wallet = message.text.strip()
-    data = await state.get_data()
-    amount = data["amount"]
-    await add_withdraw_request(message.from_user.id, amount, wallet)
-    await message.answer(f"✅ Заявка на вывод {amount}$ создана", reply_markup=main_menu(message.from_user.id))
-    await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}$\nКошелёк: {wallet}")
-    await state.clear()# ========== ИГРЫ ==========
-# Вспомогательная функция повторной игры
-async def repeat_game(call_or_msg, state, new_bet=None):
-    user_id = call_or_msg.from_user.id
-    if user_id not in user_games or 'last_game_type' not in user_games[user_id]:
-        await call_or_msg.answer("❌ Нет сохранённой игры. Начните сначала через меню.")
-        return False
-    game_type = user_games[user_id]['last_game_type']
-    bet = new_bet if new_bet is not None else user_games[user_id].get('last_bet', 0)
-    if bet < 0.1:
-        await call_or_msg.answer("❌ Ставка не может быть меньше 0.1$")
-        return False
-    balance = await get_balance(user_id)
-    if bet > balance:
-        await call_or_msg.answer(f"❌ Не хватает средств. Баланс: {balance:.2f}$")
-        return False
-    user_games[user_id]['bet'] = bet
-    if game_type == 'cube':
-        mode = user_games[user_id].get('last_cube_mode')
-        if not mode:
-            await call_or_msg.answer("❌ Ошибка: режим куба не сохранён")
-            return False
-        if mode in ('less_more', 'even_odd', '35'):
-            if mode == 'less_more':
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Меньше (1-3)", callback_data=f"choice:{mode}:less"), InlineKeyboardButton(text="Больше (4-6)", callback_data=f"choice:{mode}:more")]])
-            elif mode == 'even_odd':
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Чёт", callback_data=f"choice:{mode}:even"), InlineKeyboardButton(text="Нечет", callback_data=f"choice:{mode}:odd")]])
-            else:
-                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Больше 3.5", callback_data=f"choice:{mode}:gt35"), InlineKeyboardButton(text="Меньше 3.5", callback_data=f"choice:{mode}:lt35")]])
-            await call_or_msg.answer("Выберите вариант:", reply_markup=kb)
-            await state.set_state(GameCube.waiting_choice)
-            return True
-        elif mode == 'exact':
-            await call_or_msg.answer("Введите число от 1 до 6:")
-            await state.set_state(GameCube.waiting_exact)
-            return True
-        elif mode == 'range':
-            await call_or_msg.answer("Введите диапазон (например, 2-4):")
-            await state.set_state(GameCube.waiting_range)
-            return True
-    elif game_type == 'basketball':
-        mode = user_games[user_id].get('last_basketball_mode')
-        if mode:
-            await state.set_state(GameBasketball.waiting_choice)
-            await game_basketball_choice_after_bet(call_or_msg, state, bet)
-            return True
-    elif game_type == 'darts':
-        mode = user_games[user_id].get('last_darts_mode')
-        if mode:
-            await state.set_state(GameDarts.waiting_choice)
-            await game_darts_choice_after_bet(call_or_msg, state, bet)
-            return True
-    elif game_type == 'football':
-        mode = user_games[user_id].get('last_football_mode')
-        if mode:
-            await state.set_state(GameFootball.waiting_choice)
-            await game_football_choice_after_bet(call_or_msg, state, bet)
-            return True
-    return False
+    @dp.message(Withdraw.waiting_wallet)
+    async def withdraw_wallet(message: types.Message, state: FSMContext):
+        wallet = message.text.strip()
+        data = await state.get_data()
+        amount = data["amount"]
+        await add_withdraw_request(message.from_user.id, amount, wallet)
+        await message.answer(f"✅ Заявка на вывод {amount}$ создана", reply_markup=main_menu(message.from_user.id))
+        await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}$\nКошелёк: {wallet}")
+        # --- Лог в Discord ---
+        await send_discord_log(
+            title="💰 Новая заявка на вывод",
+            description=(
+                f"**Пользователь:** `{message.from_user.id}`\n"
+                f"**Сумма:** {amount}$\n"
+                f"**Кошелёк:** `{wallet}`"
+            ),
+            color=0xffa500
+        )
+        # --------------------
+        await state.clear()
+    # ========== ИГРЫ ==========
 
 
 # -------- КУБ ---------
@@ -2171,6 +2175,13 @@ async def activate_promo_exec(message: types.Message, state: FSMContext):
     remaining = promo["max_uses"] - promo["uses"] - 1
     await message.answer(f"✅ Активирован! +{promo['days']} дней подписки. Осталось использований: {remaining}")
     await bot.send_message(ADMIN_ID, f"🎫 {user_id} активировал {code}")
+    # --- Лог в Discord ---
+    await send_discord_log(
+        title="🎫 Активирован промокод",
+        description=f"**Пользователь:** `{user_id}`\n**Промокод:** {code}\n**Дней подписки:** +{promo['days']}",
+        color=0x00aaFF
+    )
+    # --------------------
     await state.clear()
 
 # --- Пагинация пользователей ---
@@ -3415,6 +3426,106 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
     # Закрываем тикет (опционально)
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE support_tickets SET status='closed', closed_at=$1 WHERE id=$2", int(time.time()), ticket_id)
+    await state.clear()
+
+@dp.callback_query(F.data == "mass_add")
+async def mass_add_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Пришлите файл .csv или .txt с данными аккаунтов.\n"
+                                  "Формат для TG: номер, имя (опционально)\n"
+                                  "Формат для VK: токен, имя (опционально)\n"
+                                  "Каждая строка – один аккаунт.")
+    await state.set_state("mass_add_waiting_file")
+    await callback.answer()
+
+@dp.message(F.document, lambda s: s.state == "mass_add_waiting_file")
+async def mass_add_file(message: types.Message, state: FSMContext):
+    file_id = message.document.file_id
+    file = await message.bot.get_file(file_id)
+    file_path = f"/tmp/{file_id}.txt"
+    await message.bot.download_file(file.file_path, file_path)
+    added = 0
+    errors_list = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) >= 1:
+                # Определяем тип: если первый элемент начинается с + или цифры – TG, иначе VK
+                if parts[0].replace("+","").replace("-","").isdigit():
+                    # Telegram
+                    phone = parts[0]
+                    name = parts[1] if len(parts) > 1 else phone
+                    try:
+                        # Асинхронное добавление TG – нужно реализовать через отдельную функцию
+                        # Здесь упрощённо – вызов существующего метода добавления
+                        await add_tg_account_direct(message.from_user.id, phone, name)
+                        added += 1
+                    except Exception as e:
+                        errors_list.append(f"{phone}: {e}")
+                else:
+                    # VK
+                    token = parts[0]
+                    name = parts[1] if len(parts) > 1 else token[:10]
+                    try:
+                        await add_vk_account_direct(message.from_user.id, token, name)
+                        added += 1
+                    except Exception as e:
+                        errors_list.append(f"{token[:10]}: {e}")
+    await message.answer(f"✅ Добавлено аккаунтов: {added}\n❌ Ошибок: {len(errors_list)}")
+    if errors_list:
+        with open("/tmp/errors.txt", "w") as ef:
+            ef.write("\n".join(errors_list))
+        await message.answer_document(types.FSInputFile("/tmp/errors.txt"), caption="Ошибки")
+    await state.clear()
+
+@dp.callback_query(F.data == "mass_vk")
+async def mass_vk_start(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_platinum_subscribed(callback.from_user.id):
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        return
+    await callback.message.answer(
+        "📎 Введите список VK токенов через запятую (можно с пробелами после запятой).\n"
+        "Пример:\n`token1, token2, token3`\n\n"
+        "Каждый токен будет добавлен как отдельный аккаунт.",
+        parse_mode="Markdown"
+    )
+    await state.set_state("mass_vk_tokens")
+    await callback.answer()
+
+@dp.message(StateFilter("mass_vk_tokens"))
+async def mass_vk_process(message: types.Message, state: FSMContext):
+    raw = message.text.strip()
+    # Разделяем по запятой
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        await message.answer("❌ Не найдено ни одного токена. Отмена.")
+        await state.clear()
+        return
+
+    added = 0
+    errors = []
+    for token in tokens:
+        try:
+            # Проверяем токен
+            vk_session = vk_api.VkApi(token=token)
+            vk = vk_session.get_api()
+            user = vk.users.get()[0]
+            name = f"{user['first_name']} {user['last_name']}"
+            acc_id = await add_vk_account(message.from_user.id, token, name)
+            added += 1
+        except Exception as e:
+            errors.append(f"{token[:10]}...: {get_russian_error(e)}")
+        await asyncio.sleep(0.5)  # небольшая задержка, чтобы не забанили
+
+    result_text = f"✅ Добавлено VK аккаунтов: {added}\n❌ Ошибок: {len(errors)}"
+    if errors:
+        result_text += "\n\nОшибки:\n" + "\n".join(errors[:5])
+        if len(errors) > 5:
+            result_text += f"\n... и ещё {len(errors)-5}"
+
+    await message.answer(result_text)
     await state.clear()
 
 
