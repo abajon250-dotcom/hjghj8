@@ -318,9 +318,9 @@ async def set_active_vk_account(owner_tg_id: int, account_id: int):
         await conn.execute("UPDATE vk_accounts SET is_active=TRUE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
 
 async def delete_vk_account(owner_tg_id: int, account_id: int):
+    """Удаляет VK аккаунт из базы."""
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-    # Не отправляем Discord лог здесь, потому что нет имени
 
 # ----- Админские функции -----
 async def get_all_users():
@@ -1354,7 +1354,12 @@ async def list_vk_accounts(callback: types.CallbackQuery):
         await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
         return
     text = "📘 *ВАШИ VK АККАУНТЫ*"
-    await callback.message.edit_text(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="Markdown")
+    # Избегаем ошибки "message is not modified" — если содержание не поменялось, просто игнорируем
+    try:
+        await callback.message.edit_text(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="Markdown")
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            raise
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("vk_acc_"))
@@ -3297,7 +3302,7 @@ async def vk_accounts_list(user_id: int):
         status = "✅" if acc["is_active"] else "❌"
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
-    kb.append([InlineKeyboardButton(text="🧹 ОЧИСТИТЬ НЕАКТИВНЫЕ", callback_data="clean_inactive_vk")])  # ← новая кнопка
+    kb.append([InlineKeyboardButton(text="🧹 ОЧИСТИТЬ НЕАКТИВНЫЕ", callback_data="clean_inactive_vk")])  # ← новая строка
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -3525,10 +3530,36 @@ async def clean_invalid_vk_accounts(user_id: int):
 
 @dp.callback_query(F.data == "clean_inactive_vk")
 async def clean_inactive_vk(callback: types.CallbackQuery):
+    # Сразу отвечаем, чтобы callback не истёк
+    await callback.answer("🔄 Проверка и удаление...", show_alert=False)
+    # Удаляем неактивные
     deleted = await clean_invalid_vk_accounts(callback.from_user.id)
+    # Показываем результат
     await callback.answer(f"🧹 Удалено неактивных аккаунтов: {deleted}", show_alert=True)
-    # Обновляем список
-    await list_vk_accounts(callback)
+    # Обновляем список — удаляем старое сообщение и создаём новое
+    await callback.message.delete()
+    # Заново показываем список VK аккаунтов
+    accounts = await get_user_vk_accounts(callback.from_user.id)
+    if not accounts:
+        text = "📭 *У вас нет VK аккаунтов.*\nНажмите ➕ ДОБАВИТЬ VK, чтобы подключить."
+        await callback.message.answer(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
+    else:
+        text = "📘 *ВАШИ VK АККАУНТЫ*"
+        await callback.message.answer(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="Markdown")
+
+async def clean_invalid_vk_accounts(user_id: int) -> int:
+    """Проверяет все VK аккаунты пользователя и удаляет нерабочие."""
+    deleted = 0
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
+    for row in rows:
+        try:
+            vk = vk_api.VkApi(token=row["token"])
+            vk.users.get()  # проверяем токен
+        except Exception:
+            await delete_vk_account(user_id, row["id"])
+            deleted += 1
+    return deleted
 
 # ========== ЗАПУСК ==========
 async def main():
