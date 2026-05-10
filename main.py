@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import vk_api
 import os
+import asyncpg
 
 # Глобальный словарь для хранения данных активной рассылки
 active_broadcasts = {}
