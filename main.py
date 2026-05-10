@@ -529,7 +529,7 @@ def back_button(callback_data: str):
 
 # ========== FSM состояния ==========
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
-class AddVK(StatesGroup): waiting_token = State(); collecting_token = State()
+class AddVK(StatesGroup): waiting_token = State()
 class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State();  waiting_type = State(); waiting_voice = State(); waiting_confirm = State()
 class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
 class AdminAddBalance(StatesGroup): waiting_user_id = State(); waiting_amount = State()
@@ -4051,20 +4051,7 @@ async def handle_captcha_solution(message: types.Message, state: FSMContext):
         else:
             await message.answer(f"❌ Ошибка: {e}")
 
-@dp.message(AddVK.collecting_token)
-async def collect_token(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    parts = data.get("token_parts", [])
-    # Добавляем новую часть
-    parts.append(message.text.strip())
-    await state.update_data(token_parts=parts, last_update=time.time())
 
-    # Если в очереди уже есть задача – отменяем её и создаём новую
-    if "timer_task" in data:
-        data["timer_task"].cancel()
-    # Запускаем таймер на 3 секунды
-    task = asyncio.create_task(finish_collection(message, state))
-    await state.update_data(timer_task=task)
 
 async def finish_collection(message: types.Message, state: FSMContext):
     await asyncio.sleep(3)  # ждём 3 секунды после последнего сообщения
