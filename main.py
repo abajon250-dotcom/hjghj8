@@ -884,35 +884,39 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Создаём сессию и получаем API объект
-    vk_session = vk_api.VkApi(token=token)
-    vk = vk_session.get_api()   # <-- ЭТО КЛЮЧЕВОЕ
+    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
 
-    # Проверяем токен
+    # ---- Правильное создание API ----
+    vk_session = vk_api.VkApi(token=token)
+    vk = vk_session.get_api()
+
+    # Проверка токена
     try:
         vk.users.get()
     except Exception as e:
-        await message.answer(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
         await state.clear()
         return
 
-    # Получаем контакты
+    # Собираем только друзей (беседы убираем, чтобы меньше ошибок)
     try:
         friends = vk.friends.get()["items"]
-        convs = vk.messages.getConversations(count=200)["items"]
-        chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
-        targets = friends + chat_ids
-        total = len(targets)
+        total = len(friends)
         if total == 0:
-            await message.answer("❌ Нет получателей.")
+            await status_msg.edit_text("❌ Нет друзей для рассылки.")
             await state.clear()
             return
     except Exception as e:
-        await message.answer(f"❌ Ошибка получения контактов: {get_russian_error(e)}")
+        await status_msg.edit_text(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
         await state.clear()
         return
 
-    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+    await status_msg.edit_text(
+        f"🚀 *Рассылка VK запущена*\n"
+        f"👥 Друзей: {total}\n"
+        f"⏱️ Задержка: {delay} сек\n\n"
+        f"✅ Отправлено: 0/{total} (0%)"
+    )
 
     sent = 0
     errors = 0
@@ -945,42 +949,44 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
     await update_progress()
 
-    for target in targets:
+    for friend_id in friends:
         try:
-            if isinstance(target, int):
-                vk.messages.send(user_id=target, message=text, random_id=0)
-            else:
-                vk.messages.send(peer_id=target, message=text, random_id=0)
+            vk.messages.send(user_id=friend_id, message=text, random_id=0)
             sent += 1
-        except Exception as e:
+        except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
+            # Пропускаем недоступных – они не считаются ошибками
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
                 errors += 1
+        except Exception as e:
+            errors += 1
+
         await asyncio.sleep(delay)
+
         if time.time() - last_update >= 5:
             await update_progress()
             last_update = time.time()
 
     elapsed = time.time() - start_time
-    success_rate = (sent / (sent+errors+skipped))*100 if (sent+errors+skipped) else 0
+    success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
     final_report = (
         f"✅ *Рассылка VK завершена*\n"
-        f"📤 Отправлено: {sent}/{total}\n"
+        f"📤 Отправлено: {sent}\n"
         f"❌ Ошибок: {errors}\n"
-        f"⏭️ Пропущено: {skipped}\n"
+        f"⏭️ Пропущено (недоступно): {skipped}\n"
         f"📈 Успешность: {success_rate:.1f}%\n"
         f"⏱️ Затрачено: {elapsed:.1f} сек."
     )
     await status_msg.edit_text(final_report, parse_mode="Markdown")
-    gif = SUCCESS_GIF_URL if success_rate > 70 else ERROR_GIF_URL
-    caption = "🎉 Успешно!" if success_rate > 70 else "⚠️ С ошибками"
+    gif = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
+    caption = "🎉 Успешно!" if errors == 0 else "⚠️ С ошибками"
     try:
         await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
     except:
         pass
-    await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if success_rate>70 else 0xffaa00)
+    await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if errors == 0 else 0xffaa00)
     await state.clear()
 
 # ------------------- ПОДПИСКА, БАЛАНС, ВЫВОД -------------------
