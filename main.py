@@ -12,7 +12,7 @@ import aiohttp
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -23,7 +23,7 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.account import UpdateProfileRequest, UpdateUsernameRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest
-from telethon.errors import SessionPasswordNeededError, AuthKeyError, UnauthorizedError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError, AuthKeyError, UnauthorizedError
 
 import vk_api
 
@@ -55,7 +55,6 @@ SUCCESS_GIF_URL = "https://i.gifer.com/LRP3.gif"
 ERROR_GIF_URL = "https://i.gifer.com/84OP.gif"
 
 db_pool = None
-paused_broadcasts = {}  # для приостановленных VK рассылок из-за капчи
 
 # ------------------- БАЗА ДАННЫХ -------------------
 async def init_db():
@@ -126,7 +125,6 @@ async def init_db():
                 total_contacts INTEGER,
                 sent INTEGER,
                 errors INTEGER,
-                skipped INTEGER,
                 start_time BIGINT,
                 end_time BIGINT,
                 status TEXT
@@ -337,31 +335,7 @@ async def send_discord_log(title: str, description: str, color: int = 0x00ff00):
     except Exception as e:
         logging.warning(f"Discord log error: {e}")
 
-async def check_tg_account(acc_id: int, session_file: str, user_id: int, phone: str) -> bool:
-    client = TelegramClient(session_file, API_ID, API_HASH)
-    await client.connect()
-    try:
-        await client.get_me()
-        return True
-    except (AuthKeyError, UnauthorizedError):
-        await deactivate_tg_account(user_id, acc_id, phone)
-        await bot.send_message(user_id, f"⚠️ Telegram аккаунт {phone} деактивирован.")
-        return False
-    finally:
-        await client.disconnect()
-
-async def check_vk_account(acc_id: int, token: str, user_id: int, vk_name: str) -> bool:
-    try:
-        vk = vk_api.VkApi(token=token)
-        vk.users.get()
-        return True
-    except Exception as e:
-        if "invalid token" in str(e).lower() or "access denied" in str(e).lower():
-            await delete_vk_account(user_id, acc_id)
-            await bot.send_message(user_id, f"⚠️ VK аккаунт «{vk_name}» удалён (недействительный токен).")
-        return False
-
-# ------------------- КЛАВИАТУРЫ (премиум) -------------------
+# ------------------- КЛАВИАТУРЫ -------------------
 def main_menu(tg_id: int):
     kb = [
         [InlineKeyboardButton(text="👤 КАБИНЕТ", callback_data="profile"),
@@ -442,7 +416,7 @@ async def vk_accounts_list(user_id: int):
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
 class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State()
-class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_target = State()
+class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
 class Deposit(StatesGroup): waiting_amount = State()
 class Withdraw(StatesGroup): waiting_amount = State(); waiting_wallet = State()
 class AdminGiveSubscription(StatesGroup): waiting_user_id = State(); waiting_days = State()
@@ -452,7 +426,6 @@ class AdminCreatePromocode(StatesGroup): waiting_code = State(); waiting_days = 
 class ActivatePromo(StatesGroup): waiting_code = State()
 class Support(StatesGroup): waiting_question = State(); waiting_reply = State()
 class MassVK(StatesGroup): waiting_tokens = State()
-class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_confirm = State()
 
 # ------------------- БОТ -------------------
 bot = Bot(token=BOT_TOKEN)
@@ -556,10 +529,6 @@ async def tg_account_actions(callback: types.CallbackQuery):
     if not acc:
         await callback.answer("Аккаунт не найден", show_alert=True)
         return
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT session_file, phone FROM tg_accounts WHERE id=$1", acc_id)
-        if row:
-            await check_tg_account(acc_id, row["session_file"], callback.from_user.id, row["phone"])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Сделать активным" if not acc["is_active"] else "✅ Активен", callback_data=f"tg_set_active_{acc_id}")],
         [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"tg_broadcast_{acc_id}")],
@@ -590,10 +559,6 @@ async def vk_account_actions(callback: types.CallbackQuery):
     if not acc:
         await callback.answer("Аккаунт не найден", show_alert=True)
         return
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT token, vk_name FROM vk_accounts WHERE id=$1", acc_id)
-        if row:
-            await check_vk_account(acc_id, row["token"], callback.from_user.id, row["vk_name"])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Активен" if acc["is_active"] else "❌ Неактивен", callback_data=f"vk_set_active_{acc_id}")],
         [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"vk_broadcast_{acc_id}")],
@@ -760,7 +725,7 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
 async def clean_invalid_vk_accounts(user_id: int) -> int:
     deleted = 0
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, token FROM vk_accounts WHERE owner_tg_id=$1", user_id)
+        rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
         for row in rows:
             try:
                 vk = vk_api.VkApi(token=row["token"])
@@ -819,13 +784,6 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
             return
         session_file, phone, acc_name = row["session_file"], row["phone"], row["name"]
 
-    # Проверка аккаунта
-    valid = await check_tg_account(acc_id, session_file, message.from_user.id, phone)
-    if not valid:
-        await message.answer(f"❌ Аккаунт {acc_name} неактивен.")
-        await state.clear()
-        return
-
     status_msg = await message.answer(f"📲 *Аккаунт {acc_name} загружается...*", parse_mode="Markdown")
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
@@ -860,7 +818,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         await client.disconnect()
         await state.clear()
 
-# ------------------- РАССЫЛКИ VK (улучшенная, с выбором получателей) -------------------
+# ------------------- РАССЫЛКИ VK -------------------
 @dp.callback_query(F.data.startswith("vk_broadcast_"))
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
@@ -906,74 +864,27 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Проверка аккаунта
-    valid = await check_vk_account(acc_id, token, message.from_user.id, vk_name)
-    if not valid:
-        await message.answer(f"❌ Аккаунт {vk_name} невалиден.")
-        await state.clear()
-        return
-
-    # Предлагаем выбор аудитории (только друзья или все)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 ТОЛЬКО ДРУЗЬЯ (рекомендуется)", callback_data="vk_target_friends")],
-        [InlineKeyboardButton(text="👥+💬 ДРУЗЬЯ + БЕСЕДЫ", callback_data="vk_target_all")]
-    ])
-    await state.update_data(token=token, vk_name=vk_name, text=text, delay=delay, acc_id=acc_id)
-    await state.set_state(BroadcastVK.waiting_target)
-    await message.answer("📌 Выберите получателей:", reply_markup=kb)
-
-@dp.callback_query(BroadcastVK.waiting_target, F.data.startswith("vk_target_"))
-async def vk_choose_target(callback: types.CallbackQuery, state: FSMContext):
-    target_type = callback.data.split("_")[2]  # "friends" или "all"
-    data = await state.get_data()
-    token = data["token"]
-    vk_name = data["vk_name"]
-    text = data["text"]
-    delay = data["delay"]
-    acc_id = data["acc_id"]
-    user_id = callback.from_user.id
-
-    status_msg = await callback.message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
     vk = vk_api.VkApi(token=token)
     try:
-        # Собираем контакты
+        vk.users.get()
         friends = vk.friends.get()["items"]
-        if target_type == "all":
-            convs = vk.messages.getConversations(count=200)["items"]
-            chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
-            targets = friends + chat_ids
-            total_friends = len(friends)
-            total_chats = len(chat_ids)
-        else:
-            targets = friends
-            total_friends = len(friends)
-            total_chats = 0
+        convs = vk.messages.getConversations(count=200)["items"]
+        chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
+        targets = friends + chat_ids
         total = len(targets)
         if total == 0:
             await status_msg.edit_text("❌ Нет получателей.")
-            await state.clear()
             return
-
-        # Прогноз
-        est_sec = total * delay
-        est_str = time.strftime("%H ч %M мин %S сек", time.gmtime(est_sec))
-        await status_msg.edit_text(
-            f"🚀 *Рассылка VK запущена*\n"
-            f"👥 Всего: {total} (друзей: {total_friends}, бесед: {total_chats})\n"
-            f"⏱️ Задержка: {delay} сек\n"
-            f"⏳ Ожидаемое время: {est_str}\n\n"
-            f"✅ Отправлено: 0/{total} (0%)"
-        )
 
         sent = 0
         errors = 0
         skipped = 0
         start_time = time.time()
         last_update = start_time
-        dynamic_delay = delay
 
         async def update_progress():
-            nonlocal sent, errors, skipped, total, start_time, dynamic_delay
+            nonlocal sent, errors, skipped, total, start_time
             elapsed = time.time() - start_time
             processed = sent + errors + skipped
             percent = (processed / total) * 100 if total else 0
@@ -991,76 +902,36 @@ async def vk_choose_target(callback: types.CallbackQuery, state: FSMContext):
                 f"📊 Прогресс: {percent:.1f}%\n"
                 f"{bar}\n"
                 f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-                f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
+                f"⏲️ Осталось ~ {remaining_sec:.0f} сек",
+                parse_mode="Markdown"
             )
             await status_msg.edit_text(text_status, parse_mode="Markdown")
 
-        for idx, target in enumerate(targets):
+        for target in targets:
             try:
                 if isinstance(target, int):
                     vk.messages.send(user_id=target, message=text, random_id=0)
                 else:
                     vk.messages.send(peer_id=target, message=text, random_id=0)
                 sent += 1
-                # Если были ошибки и delay был повышен, постепенно снижаем
-                if dynamic_delay > delay:
-                    dynamic_delay = max(delay, dynamic_delay - 0.5)
-            except vk_api.exceptions.ApiError as e:
+            except Exception as e:
                 err_str = str(e).lower()
-                if "captcha needed" in err_str:
-                    captcha_sid = getattr(e, 'captcha_sid', None)
-                    captcha_img = getattr(e, 'captcha_img', None)
-                    if captcha_sid and captcha_img:
-                        # Приостанавливаем
-                        broadcast_data = {
-                            "user_id": user_id,
-                            "status_msg": status_msg,
-                            "original_msg": callback.message,
-                            "vk": vk,
-                            "vk_name": vk_name,
-                            "text": text,
-                            "delay": delay,
-                            "targets": targets,
-                            "total": total,
-                            "sent": sent,
-                            "errors": errors,
-                            "skipped": skipped,
-                            "start_time": start_time,
-                            "current_idx": idx,
-                            "captcha_sid": captcha_sid,
-                            "captcha_img": captcha_img,
-                            "dynamic_delay": dynamic_delay
-                        }
-                        paused_broadcasts[user_id] = broadcast_data
-                        await callback.message.answer_photo(photo=captcha_img, caption=f"🔐 *Капча для {vk_name}*\nВведите код:", parse_mode="Markdown")
-                        await state.clear()
-                        return
-                    else:
-                        errors += 1
-                elif "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
+                if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                     skipped += 1
-                elif "flood" in err_str:
-                    dynamic_delay = min(dynamic_delay + 1, 10)
-                    await asyncio.sleep(dynamic_delay)
                 else:
                     errors += 1
-            except Exception as e:
-                errors += 1
-
-            await asyncio.sleep(dynamic_delay)
-
+            await asyncio.sleep(delay)
             if time.time() - last_update >= 5:
                 await update_progress()
                 last_update = time.time()
 
-        # Финальный отчёт
         elapsed = time.time() - start_time
         success_rate = (sent / (sent+errors+skipped))*100 if (sent+errors+skipped) else 0
         final_report = (
             f"✅ *Рассылка VK завершена*\n"
             f"📤 Отправлено: {sent}/{total}\n"
             f"❌ Ошибок: {errors}\n"
-            f"⏭️ Пропущено (недоступно): {skipped}\n"
+            f"⏭️ Пропущено: {skipped}\n"
             f"📈 Успешность: {success_rate:.1f}%\n"
             f"⏱️ Затрачено: {elapsed:.1f} сек."
         )
@@ -1068,41 +939,14 @@ async def vk_choose_target(callback: types.CallbackQuery, state: FSMContext):
         gif = SUCCESS_GIF_URL if success_rate > 70 else ERROR_GIF_URL
         caption = "🎉 Успешно!" if success_rate > 70 else "⚠️ С ошибками"
         try:
-            await callback.message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
+            await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
         except:
             pass
         await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if success_rate>70 else 0xffaa00)
-        await state.clear()
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
+    finally:
         await state.clear()
-
-@dp.message()
-async def handle_captcha_vk(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in paused_broadcasts:
-        return
-    code = message.text.strip()
-    bd = paused_broadcasts.pop(user_id)
-    try:
-        target = bd["targets"][bd["current_idx"]]
-        if isinstance(target, int):
-            bd["vk"].messages.send(user_id=target, message=bd["text"], random_id=0,
-                                   captcha_sid=bd["captcha_sid"], captcha_key=code)
-        else:
-            bd["vk"].messages.send(peer_id=target, message=bd["text"], random_id=0,
-                                   captcha_sid=bd["captcha_sid"], captcha_key=code)
-        await message.answer("✅ Капча решена. Продолжаем рассылку.")
-        # Восстанавливаем прогресс и продолжаем
-        await continue_vk_broadcast(bd)
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
-
-async def continue_vk_broadcast(bd):
-    # Здесь можно восстановить цикл с текущего индекса. Для простоты можно перезапустить рассылку,
-    # но в коде выше мы уже сохранили все параметры, поэтому можно написать аналогичный цикл.
-    # Упростим: предложим пользователю запустить рассылку заново.
-    await bd["original_msg"].answer("После решения капчи рассылку нужно запустить снова (нажмите кнопку '📨 Рассылка').")
 
 # ------------------- ПОДПИСКА, БАЛАНС, ВЫВОД -------------------
 @dp.callback_query(F.data == "buy_sub")
@@ -1829,16 +1673,7 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
 # ------------------- ЗАПУСК -------------------
 async def main():
     await init_db()
-    asyncio.create_task(periodic_check())  # фоновая проверка VK
     await dp.start_polling(bot)
-
-async def periodic_check():
-    while True:
-        await asyncio.sleep(3600)  # раз в час
-        async with db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT id, owner_tg_id, token, vk_name FROM vk_accounts")
-            for row in rows:
-                await check_vk_account(row["id"], row["token"], row["owner_tg_id"], row["vk_name"])
 
 if __name__ == "__main__":
     asyncio.run(main())
