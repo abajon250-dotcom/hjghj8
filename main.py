@@ -498,11 +498,11 @@ async def profile(callback: types.CallbackQuery):
     balance = user["balance"]
     sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
     text = (
-        f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>ВАШ ПРОФИЛЬ</b> <tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji>\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>ВАШ ПРОФИЛЬ</b>\n\n"
         "┌───────────────────┐\n"
-        f"│  <tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>БАЛАНС</b>      │ <code>{balance:.2f}$</code>\n"
+        f"│  💰 <b>БАЛАНС</b>      │ {balance:.2f}$\n"
         "├───────────────────┤\n"
-        f"│  <tg-emoji emoji-id='{EMOJI['welcome']}'>💎</tg-emoji> <b>ПОДПИСКА</b>    │ до <code>{sub_until}</code>\n"
+        f"│  💎 <b>ПОДПИСКА</b>    │ до {sub_until}\n"
         "└───────────────────┘\n\n"
         "▫️ Пополните счёт\n"
         "▫️ Активируйте промокод"
@@ -514,7 +514,9 @@ async def profile(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "my_accounts")
 async def my_accounts(callback: types.CallbackQuery):
     await callback.answer()
-    await callback.message.edit_text("<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> Управление аккаунтами", reply_markup=my_accounts_menu(), parse_mode="HTML")
+    await callback.message.edit_text(
+        f"<tg-emoji emoji-id='{EMOJI['tg_account']}'></tg-emoji> <b>Управление аккаунтами</b>",
+        reply_markup=my_accounts_menu(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "connect_new_account")
 async def connect_new(callback: types.CallbackQuery):
