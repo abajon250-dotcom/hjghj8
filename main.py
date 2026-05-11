@@ -677,16 +677,14 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         return
 
     try:
-        # 1. Проверяем токен через VK API
+        # Создаём сессию и получаем объект API
         vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()           # <-- обязательно получаем объект API
-        user = vk.users.get()[0]            # <-- теперь работает
-        name = f"{user['first_name']} {user['last_name']}"
+        vk = vk_session.get_api()          # <-- ЭТА СТРОКА ОБЯЗАТЕЛЬНА
+        user = vk.users.get()[0]           # <-- ТЕПЕРЬ РАБОТАЕТ
 
-        # 2. Добавляем аккаунт в базу данных (функция add_vk_account должна возвращать id)
+        name = f"{user['first_name']} {user['last_name']}"
         acc_id = await add_vk_account(message.from_user.id, token, name)
 
-        # 3. Создаём клавиатуру с кнопками
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -696,19 +694,15 @@ async def add_vk_token(message: types.Message, state: FSMContext):
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
 
-        # 4. Отправляем сообщение об успехе
         await message.answer(f"✅ VK аккаунт **{name}** добавлен!", reply_markup=kb, parse_mode="Markdown")
         await state.clear()
-
-        # 5. (Опционально) Отправляем лог в Discord
         await send_discord_log("➕ Добавлен VK аккаунт", f"Пользователь: {message.from_user.id}\nАккаунт: {name}", 0x00ff00)
 
     except vk_api.exceptions.ApiError as e:
-        error_text = str(e)
-        if "invalid access_token" in error_text or "5" in error_text:
-            await message.answer("❌ Неверный токен. Убедитесь, что вы скопировали весь токен и у него есть доступ к сообщениям (`messages`).")
+        if "invalid access_token" in str(e) or "5" in str(e):
+            await message.answer("❌ Неверный токен. Получите новый через https://vkhost.github.io (включите `messages`).")
         else:
-            await message.answer(f"❌ Ошибка VK: {error_text}")
+            await message.answer(f"❌ Ошибка VK: {e}")
         await state.clear()
     except Exception as e:
         await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
