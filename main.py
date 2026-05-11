@@ -926,14 +926,16 @@ async def broadcast_vk_text(message: types.Message, state: FSMContext):
 async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     if not raw:
-        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите число.", parse_mode="HTML")
+        await message.answer("❌ Введите задержку в секундах (число).")
         return
     try:
         delay = float(raw.replace(',', '.'))
-        if delay < 1:
-            delay = 1
-    except:
-        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нужно число, например 5", parse_mode="HTML")
+        if delay < 0.5:
+            delay = 0.5
+        if delay > 5:
+            await message.answer("⚠️ Большая задержка (>5 сек) сильно замедлит рассылку. Рекомендуется 1–2 сек.")
+    except ValueError:
+        await message.answer("❌ Нужно число, например 2")
         return
 
     data = await state.get_data()
@@ -943,45 +945,44 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Аккаунт не найден", parse_mode="HTML")
+            await message.answer("❌ Аккаунт не найден")
             await state.clear()
             return
         token, vk_name, is_active = row["token"], row["vk_name"], row["is_active"]
 
     if not is_active:
-        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Аккаунт {vk_name} неактивен.", parse_mode="HTML")
+        await message.answer(f"❌ Аккаунт {vk_name} неактивен.")
         await state.clear()
         return
 
-    status_msg = await message.answer(f"<tg-emoji emoji-id='{EMOJI['vk']}'></tg-emoji> <b>Аккаунт {vk_name} загружается...</b>", parse_mode="HTML")
-
+    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
     try:
         vk.users.get()
     except Exception as e:
-        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Ошибка авторизации VK: {get_russian_error(e)}", parse_mode="HTML")
+        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
         await state.clear()
         return
 
+    # Получаем список друзей
     try:
         friends = vk.friends.get()["items"]
         total = len(friends)
         if total == 0:
-            await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нет друзей для рассылки.", parse_mode="HTML")
+            await status_msg.edit_text("❌ Нет друзей для рассылки.")
             await state.clear()
             return
     except Exception as e:
-        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Ошибка получения друзей: {get_russian_error(e)}", parse_mode="HTML")
+        await status_msg.edit_text(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
         await state.clear()
         return
 
     await status_msg.edit_text(
-        f"<tg-emoji emoji-id='{EMOJI['progress_start']}'></tg-emoji> <b>Рассылка VK запущена</b>\n"
-        f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Друзей: {total}\n"
-        f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Задержка: {delay} сек\n\n"
-        f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Отправлено: 0/{total} (0%)",
-        parse_mode="HTML"
+        f"🚀 *Рассылка VK запущена*\n"
+        f"👥 Друзей: {total}\n"
+        f"⏱️ Задержка: {delay} сек\n\n"
+        f"✅ Отправлено: 0/{total} (0%)"
     )
 
     sent = 0
@@ -991,29 +992,26 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     last_update = start_time
 
     async def update_progress():
-        nonlocal sent, errors, skipped, total, start_time
+        nonlocal sent, total, start_time
         elapsed = time.time() - start_time
-        processed = sent + errors + skipped
-        percent = (processed / total) * 100 if total else 0
+        percent = (sent / total) * 100 if total else 0
         speed = sent / elapsed * 60 if elapsed > 0 else 0
-        remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+        remaining_sec = (total - sent) / (speed / 60) if speed > 0 else 0
         bar_len = 20
         filled = int(bar_len * sent / total) if total else 0
-        bar_start = f"<tg-emoji emoji-id='{EMOJI['progress_start']}'></tg-emoji>" * min(filled, 1)
-        bar_mid = f"<tg-emoji emoji-id='{EMOJI['progress_mid']}'></tg-emoji>" * max(0, filled - 2)
-        bar_end = f"<tg-emoji emoji-id='{EMOJI['progress_end']}'></tg-emoji>" if filled == bar_len else ""
-        bar = bar_start + bar_mid + "⬜" * (bar_len - filled) + bar_end
+        bar = "🟩" * filled + "⬜" * (bar_len - filled)
         text_status = (
-            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> <b>Рассылка VK в процессе</b>\n\n"
-            f"<tg-emoji emoji-id='{EMOJI['chats']}'></tg-emoji> Всего: {total}\n"
-            f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}\n"
-            f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибок: {errors}\n"
-            f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
-            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Прогресс: {percent:.1f}%\n"
+            f"📤 *Рассылка VK в процессе*\n\n"
+            f"👥 Всего: {total}\n"
+            f"✅ Отправлено: {sent}\n"
+            f"❌ Ошибок: {errors}\n"
+            f"⏭️ Пропущено: {skipped}\n"
+            f"📊 Прогресс: {percent:.1f}%\n"
             f"{bar}\n"
-            f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Осталось ~ {remaining_sec:.0f} сек"
+            f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+            f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
         )
-        await status_msg.edit_text(text_status, parse_mode="HTML")
+        await status_msg.edit_text(text_status, parse_mode="Markdown")
 
     await update_progress()
 
@@ -1023,13 +1021,20 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
+            # Если токен умер – останавливаем рассылку
+            if "invalid access_token" in err_str or "5" in err_str:
+                await status_msg.edit_text(f"❌ Аккаунт {vk_name} потерял доступ. Рассылка остановлена.")
+                await state.clear()
+                return
+            # Недоступные контакты – просто пропускаем (не увеличиваем задержку)
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
                 errors += 1
-        except Exception:
+        except Exception as e:
             errors += 1
 
+        # Фиксированная задержка, даже если ошибка
         await asyncio.sleep(delay)
 
         if time.time() - last_update >= 5:
@@ -1039,22 +1044,20 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     elapsed = time.time() - start_time
     success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
     final_report = (
-        f"<tg-emoji emoji-id='{EMOJI['progress_end']}'></tg-emoji> <b>Спам VK завершен!</b>\n\n"
-        f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}/{total}\n"
-        f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Успешно: {sent}\n"
-        f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибки: {errors}\n"
-        f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
-        f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Успешность: {success_rate:.1f}%\n"
-        f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Время: {elapsed:.1f} сек."
+        f"✅ *Рассылка VK завершена*\n"
+        f"📤 Отправлено: {sent}\n"
+        f"❌ Ошибок: {errors}\n"
+        f"⏭️ Пропущено (недоступно): {skipped}\n"
+        f"📈 Успешность: {success_rate:.1f}%\n"
+        f"⏱️ Затрачено: {elapsed:.1f} сек."
     )
-    await status_msg.edit_text(final_report, parse_mode="HTML")
-    gif = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
-    caption = "🎉 Успешно!" if errors == 0 else "⚠️ С ошибками"
+    await status_msg.edit_text(final_report, parse_mode="Markdown")
+    gif = SUCCESS_GIF_URL if sent > 0 else ERROR_GIF_URL
+    caption = "🎉 Успешно!" if sent > 0 else "⚠️ С ошибками"
     try:
         await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
     except:
         pass
-    await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if errors == 0 else 0xffaa00)
     await state.clear()
 
 # ------------------- ПОДПИСКА, БАЛАНС, ВЫВОД -------------------
