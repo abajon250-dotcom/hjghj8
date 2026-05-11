@@ -884,91 +884,104 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
-    vk = vk_api.VkApi(token=token)
+    # Создаём сессию и получаем API объект
+    vk_session = vk_api.VkApi(token=token)
+    vk = vk_session.get_api()   # <-- ЭТО КЛЮЧЕВОЕ
+
+    # Проверяем токен
     try:
         vk.users.get()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+        await state.clear()
+        return
+
+    # Получаем контакты
+    try:
         friends = vk.friends.get()["items"]
         convs = vk.messages.getConversations(count=200)["items"]
         chat_ids = [c["conversation"]["peer"]["id"] for c in convs]
         targets = friends + chat_ids
         total = len(targets)
         if total == 0:
-            await status_msg.edit_text("❌ Нет получателей.")
+            await message.answer("❌ Нет получателей.")
             await state.clear()
             return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка получения контактов: {get_russian_error(e)}")
+        await state.clear()
+        return
 
-        sent = 0
-        errors = 0
-        skipped = 0
-        start_time = time.time()
-        last_update = start_time
+    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
 
-        async def update_progress():
-            nonlocal sent, errors, skipped, total, start_time
-            elapsed = time.time() - start_time
-            processed = sent + errors + skipped
-            percent = (processed / total) * 100 if total else 0
-            speed = sent / elapsed * 60 if elapsed > 0 else 0
-            remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
-            bar_len = 20
-            filled = int(bar_len * sent / total) if total else 0
-            bar = "🟩" * filled + "⬜" * (bar_len - filled)
-            text_status = (
-                f"📤 *Рассылка VK в процессе*\n\n"
-                f"👥 Всего: {total}\n"
-                f"✅ Отправлено: {sent}\n"
-                f"❌ Ошибок: {errors}\n"
-                f"⏭️ Пропущено: {skipped}\n"
-                f"📊 Прогресс: {percent:.1f}%\n"
-                f"{bar}\n"
-                f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-                f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
-            )
-            await status_msg.edit_text(text_status, parse_mode="Markdown")
+    sent = 0
+    errors = 0
+    skipped = 0
+    start_time = time.time()
+    last_update = start_time
 
-        await update_progress()
-
-        for target in targets:
-            try:
-                if isinstance(target, int):
-                    vk.messages.send(user_id=target, message=text, random_id=0)
-                else:
-                    vk.messages.send(peer_id=target, message=text, random_id=0)
-                sent += 1
-            except Exception as e:
-                err_str = str(e).lower()
-                if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
-                    skipped += 1
-                else:
-                    errors += 1
-            await asyncio.sleep(delay)
-            if time.time() - last_update >= 5:
-                await update_progress()
-                last_update = time.time()
-
+    async def update_progress():
+        nonlocal sent, errors, skipped, total, start_time
         elapsed = time.time() - start_time
-        success_rate = (sent / (sent+errors+skipped))*100 if (sent+errors+skipped) else 0
-        final_report = (
-            f"✅ *Рассылка VK завершена*\n"
-            f"📤 Отправлено: {sent}/{total}\n"
+        processed = sent + errors + skipped
+        percent = (processed / total) * 100 if total else 0
+        speed = sent / elapsed * 60 if elapsed > 0 else 0
+        remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
+        bar_len = 20
+        filled = int(bar_len * sent / total) if total else 0
+        bar = "🟩" * filled + "⬜" * (bar_len - filled)
+        text_status = (
+            f"📤 *Рассылка VK в процессе*\n\n"
+            f"👥 Всего: {total}\n"
+            f"✅ Отправлено: {sent}\n"
             f"❌ Ошибок: {errors}\n"
             f"⏭️ Пропущено: {skipped}\n"
-            f"📈 Успешность: {success_rate:.1f}%\n"
-            f"⏱️ Затрачено: {elapsed:.1f} сек."
+            f"📊 Прогресс: {percent:.1f}%\n"
+            f"{bar}\n"
+            f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
+            f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
         )
-        await status_msg.edit_text(final_report, parse_mode="Markdown")
-        gif = SUCCESS_GIF_URL if success_rate > 70 else ERROR_GIF_URL
-        caption = "🎉 Успешно!" if success_rate > 70 else "⚠️ С ошибками"
+        await status_msg.edit_text(text_status, parse_mode="Markdown")
+
+    await update_progress()
+
+    for target in targets:
         try:
-            await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
-        except:
-            pass
-        await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if success_rate>70 else 0xffaa00)
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
-    finally:
-        await state.clear()
+            if isinstance(target, int):
+                vk.messages.send(user_id=target, message=text, random_id=0)
+            else:
+                vk.messages.send(peer_id=target, message=text, random_id=0)
+            sent += 1
+        except Exception as e:
+            err_str = str(e).lower()
+            if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
+                skipped += 1
+            else:
+                errors += 1
+        await asyncio.sleep(delay)
+        if time.time() - last_update >= 5:
+            await update_progress()
+            last_update = time.time()
+
+    elapsed = time.time() - start_time
+    success_rate = (sent / (sent+errors+skipped))*100 if (sent+errors+skipped) else 0
+    final_report = (
+        f"✅ *Рассылка VK завершена*\n"
+        f"📤 Отправлено: {sent}/{total}\n"
+        f"❌ Ошибок: {errors}\n"
+        f"⏭️ Пропущено: {skipped}\n"
+        f"📈 Успешность: {success_rate:.1f}%\n"
+        f"⏱️ Затрачено: {elapsed:.1f} сек."
+    )
+    await status_msg.edit_text(final_report, parse_mode="Markdown")
+    gif = SUCCESS_GIF_URL if success_rate > 70 else ERROR_GIF_URL
+    caption = "🎉 Успешно!" if success_rate > 70 else "⚠️ С ошибками"
+    try:
+        await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
+    except:
+        pass
+    await send_discord_log("📘 VK рассылка", f"Аккаунт: {vk_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}\nПропущено: {skipped}", 0x00ff00 if success_rate>70 else 0xffaa00)
+    await state.clear()
 
 # ------------------- ПОДПИСКА, БАЛАНС, ВЫВОД -------------------
 @dp.callback_query(F.data == "buy_sub")
