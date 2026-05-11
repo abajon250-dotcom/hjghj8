@@ -469,13 +469,13 @@ async def start_cmd(message: types.Message):
             [InlineKeyboardButton(text="📢 ПОДПИСАТЬСЯ", url=f"https://t.me/{CHANNEL_USERNAME}")],
             [InlineKeyboardButton(text="✅ ПРОВЕРИТЬ", callback_data="check_sub_start")]
         ])
-        await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb, parse_mode="HTML")
         return
     try:
-        await message.answer_animation(animation="https://i.gifer.com/X63H.gif", caption="<tg-emoji emoji-id='5278611606756942667'></tg-emoji> <b>ДОБРО ПОЖАЛОВАТЬ В Quasar!</b>", parse_mode="HTML")
+        await message.answer_animation(animation="https://i.gifer.com/X63H.gif", caption=f"<tg-emoji emoji-id='{EMOJI['welcome']}'>👋</tg-emoji> <b>ДОБРО ПОЖАЛОВАТЬ В Quasar!</b>", parse_mode="HTML")
     except:
         pass
-    await message.answer("<tg-emoji emoji-id='5471949924658588235'></tg-emoji> <b>Главное меню</b>", reply_markup=main_menu(message.from_user.id), parse_mode="HTML")
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> <b>Главное меню</b>", reply_markup=main_menu(message.from_user.id), parse_mode="HTML")
 
 @dp.callback_query(F.data == "check_sub_start")
 async def check_sub_start(callback: types.CallbackQuery):
@@ -483,7 +483,7 @@ async def check_sub_start(callback: types.CallbackQuery):
         await callback.message.delete()
         await start_cmd(callback.message)
     else:
-        await callback.answer("❌ Вы не подписаны", show_alert=True)
+        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Вы не подписаны", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -498,23 +498,23 @@ async def profile(callback: types.CallbackQuery):
     balance = user["balance"]
     sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
     text = (
-        "💰 *ВАШ ПРОФИЛЬ* 💰\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>ВАШ ПРОФИЛЬ</b> <tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji>\n\n"
         "┌───────────────────┐\n"
-        f"│  💰 *БАЛАНС*      │ `{balance:.2f}$`\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>БАЛАНС</b>      │ <code>{balance:.2f}$</code>\n"
         "├───────────────────┤\n"
-        f"│  💎 *ПОДПИСКА*    │ до `{sub_until}`\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['welcome']}'>💎</tg-emoji> <b>ПОДПИСКА</b>    │ до <code>{sub_until}</code>\n"
         "└───────────────────┘\n\n"
         "▫️ Пополните счёт\n"
         "▫️ Активируйте промокод"
     )
-    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
     await callback.answer()
 
 # ------------------- АККАУНТЫ -------------------
 @dp.callback_query(F.data == "my_accounts")
 async def my_accounts(callback: types.CallbackQuery):
     await callback.answer()
-    await callback.message.edit_text("Управление аккаунтами", reply_markup=my_accounts_menu())
+    await callback.message.edit_text("<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> Управление аккаунтами", reply_markup=my_accounts_menu(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "connect_new_account")
 async def connect_new(callback: types.CallbackQuery):
@@ -525,23 +525,23 @@ async def connect_new(callback: types.CallbackQuery):
 async def list_tg_accounts(callback: types.CallbackQuery):
     accounts = await get_user_tg_accounts(callback.from_user.id)
     if not accounts:
-        text = "📭 *У вас нет Telegram аккаунтов.*\nНажмите ➕ ДОБАВИТЬ TG, чтобы подключить."
-        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
+        text = f"<tg-emoji emoji-id='{EMOJI['error']}'>📭</tg-emoji> <b>У вас нет Telegram аккаунтов.</b>\nНажмите ➕ ДОБАВИТЬ TG, чтобы подключить."
+        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="HTML")
         return
-    text = "📱 *ВАШИ TELEGRAM АККАУНТЫ*"
-    await callback.message.edit_text(text, reply_markup=await tg_accounts_list(callback.from_user.id), parse_mode="Markdown")
+    text = f"<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> <b>ВАШИ TELEGRAM АККАУНТЫ</b>"
+    await callback.message.edit_text(text, reply_markup=await tg_accounts_list(callback.from_user.id), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "list_vk_accounts")
 async def list_vk_accounts(callback: types.CallbackQuery):
     accounts = await get_user_vk_accounts(callback.from_user.id)
     if not accounts:
-        text = "📭 *У вас нет VK аккаунтов.*\nНажмите ➕ ДОБАВИТЬ VK, чтобы подключить."
-        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="Markdown")
+        text = f"<tg-emoji emoji-id='{EMOJI['error']}'>📭</tg-emoji> <b>У вас нет VK аккаунтов.</b>\nНажмите ➕ ДОБАВИТЬ VK, чтобы подключить."
+        await callback.message.edit_text(text, reply_markup=back_button("my_accounts"), parse_mode="HTML")
         return
-    text = "📘 *ВАШИ VK АККАУНТЫ*"
+    text = f"<tg-emoji emoji-id='{EMOJI['vk']}'>📘</tg-emoji> <b>ВАШИ VK АККАУНТЫ</b>"
     try:
-        await callback.message.edit_text(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="Markdown")
+        await callback.message.edit_text(text, reply_markup=await vk_accounts_list(callback.from_user.id), parse_mode="HTML")
     except Exception as e:
         if "message is not modified" not in str(e):
             raise
@@ -560,21 +560,21 @@ async def tg_account_actions(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="📨 Рассылка", callback_data=f"tg_broadcast_{acc_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="list_tg_accounts")]
     ])
-    await callback.message.edit_text(f"Аккаунт: {acc['name']} ({acc['phone']})", reply_markup=keyboard)
+    await callback.message.edit_text(f"<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> Аккаунт: {acc['name']} ({acc['phone']})", reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tg_set_active_"))
 async def tg_set_active(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[3])
     await set_active_tg_account(callback.from_user.id, acc_id)
-    await callback.answer("✅ Активен", show_alert=True)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Активен", show_alert=True)
     await list_tg_accounts(callback)
 
 @dp.callback_query(F.data.startswith("tg_del_"))
 async def tg_delete(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[2])
     await delete_tg_account(callback.from_user.id, acc_id)
-    await callback.answer("Удалён", show_alert=True)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Удалён", show_alert=True)
     await list_tg_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_acc_"))
@@ -591,30 +591,30 @@ async def vk_account_actions(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"vk_del_{acc_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="list_vk_accounts")]
     ])
-    await callback.message.edit_text(f"Управление VK: {acc['name']}", reply_markup=keyboard)
+    await callback.message.edit_text(f"<tg-emoji emoji-id='{EMOJI['vk']}'>📘</tg-emoji> Управление VK: {acc['name']}", reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("vk_set_active_"))
 async def vk_set_active(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[3])
     await set_active_vk_account(callback.from_user.id, acc_id)
-    await callback.answer("Аккаунт активен", show_alert=True)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Аккаунт активен", show_alert=True)
     await list_vk_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_del_"))
 async def vk_delete(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[2])
     await delete_vk_account(callback.from_user.id, acc_id)
-    await callback.answer("Удалён", show_alert=True)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Удалён", show_alert=True)
     await list_vk_accounts(callback)
 
 # ------------------- ДОБАВЛЕНИЕ TG -------------------
 @dp.callback_query(F.data == "add_tg")
 async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("📞 Введите номер телефона (+79991234567):")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['phone']}'>📞</tg-emoji> Введите номер телефона (+79991234567):", parse_mode="HTML")
     await state.set_state(AddTG.waiting_phone)
     await callback.answer()
 
@@ -627,10 +627,10 @@ async def add_tg_phone(message: types.Message, state: FSMContext):
     try:
         await client.send_code_request(phone)
         await state.update_data(phone=phone, session_file=session_file, client=client)
-        await message.answer("🔑 Введите код из SMS:")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['token_input']}'>🔑</tg-emoji> Введите код из SMS:", parse_mode="HTML")
         await state.set_state(AddTG.waiting_code)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
 
 @dp.message(AddTG.waiting_code)
@@ -649,15 +649,15 @@ async def add_tg_code(message: types.Message, state: FSMContext):
              InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")],
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
-        await message.answer(f"✅ Аккаунт {name} добавлен!", reply_markup=kb)
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Аккаунт {name} добавлен!", reply_markup=kb, parse_mode="HTML")
         await client.disconnect()
         await state.clear()
         await send_discord_log("➕ Добавлен Telegram аккаунт", f"Пользователь: {message.from_user.id}\nАккаунт: {name}", 0x00ff00)
     except SessionPasswordNeededError:
-        await message.answer("🔒 Введите 2FA пароль:")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['blocked']}'>🔒</tg-emoji> Введите 2FA пароль:", parse_mode="HTML")
         await state.set_state(AddTG.waiting_2fa)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
 
 @dp.message(AddTG.waiting_2fa)
@@ -675,21 +675,21 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
              InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"tg_broadcast_{acc_id}")],
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
-        await message.answer(f"✅ Аккаунт {name} добавлен (2FA)!", reply_markup=kb)
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Аккаунт {name} добавлен (2FA)!", reply_markup=kb, parse_mode="HTML")
         await client.disconnect()
         await state.clear()
         await send_discord_log("➕ Добавлен Telegram аккаунт (2FA)", f"Пользователь: {message.from_user.id}\nАккаунт: {name}", 0x00ff00)
     except Exception as e:
-        await message.answer(f"❌ Ошибка 2FA: {get_russian_error(e)}")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка 2FA: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
 
 # ------------------- ДОБАВЛЕНИЕ VK -------------------
 @dp.callback_query(F.data == "add_vk")
 async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("🔑 Введите токен VK (access_token):")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['token_input']}'>🔑</tg-emoji> Введите токен VK (access_token):", parse_mode="HTML")
     await state.set_state(AddVK.waiting_token)
     await callback.answer()
 
@@ -697,20 +697,18 @@ async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
 async def add_vk_token(message: types.Message, state: FSMContext):
     token = message.text.strip()
     if not token:
-        await message.answer("❌ Токен не может быть пустым.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Токен не может быть пустым.", parse_mode="HTML")
         await state.clear()
         return
 
     try:
-        # Создаём сессию и получаем объект API
         vk_session = vk_api.VkApi(token=token)
-        vk = vk_session.get_api()          # <-- ЭТА СТРОКА ОБЯЗАТЕЛЬНА
-        user = vk.users.get()[0]           # <-- ТЕПЕРЬ РАБОТАЕТ
+        vk = vk_session.get_api()
+        user = vk.users.get()[0]
 
         name = f"{user['first_name']} {user['last_name']}"
         acc_id = await add_vk_account(message.from_user.id, token, name)
 
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
@@ -719,26 +717,26 @@ async def add_vk_token(message: types.Message, state: FSMContext):
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
 
-        await message.answer(f"✅ VK аккаунт **{name}** добавлен!", reply_markup=kb, parse_mode="Markdown")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> VK аккаунт **{name}** добавлен!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
         await send_discord_log("➕ Добавлен VK аккаунт", f"Пользователь: {message.from_user.id}\nАккаунт: {name}", 0x00ff00)
 
     except vk_api.exceptions.ApiError as e:
         if "invalid access_token" in str(e) or "5" in str(e):
-            await message.answer("❌ Неверный токен. Получите новый через https://vkhost.github.io (включите `messages`).")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Неверный токен. Получите новый через https://vkhost.github.io (включите `messages`).", parse_mode="HTML")
         else:
-            await message.answer(f"❌ Ошибка VK: {e}")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка VK: {e}", parse_mode="HTML")
         await state.clear()
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {get_russian_error(e)}")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
 
 @dp.callback_query(F.data == "mass_vk")
 async def mass_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer("❌ Нужна подписка!", show_alert=True)
+        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нужна подписка!", show_alert=True)
         return
-    await callback.message.answer("📎 Введите список VK токенов через запятую (можно с пробелами).")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['friends']}'>📎</tg-emoji> Введите список VK токенов через запятую (можно с пробелами).", parse_mode="HTML")
     await state.set_state(MassVK.waiting_tokens)
     await callback.answer()
 
@@ -747,7 +745,7 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
     if not tokens:
-        await message.answer("❌ Не найдено ни одного токена.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Не найдено ни одного токена.", parse_mode="HTML")
         await state.clear()
         return
     added = 0
@@ -763,7 +761,7 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
         except Exception as e:
             errors.append(f"{token[:10]}...: {str(e)}")
         await asyncio.sleep(0.5)
-    await message.answer(f"✅ Добавлено: {added}\n❌ Ошибок: {len(errors)}")
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Добавлено: {added}\n<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибок: {len(errors)}", parse_mode="HTML")
     await state.clear()
 
 # ------------------- ОЧИСТКА НЕАКТИВНЫХ VK -------------------
@@ -782,9 +780,9 @@ async def clean_invalid_vk_accounts(user_id: int) -> int:
 
 @dp.callback_query(F.data == "clean_inactive_vk")
 async def clean_inactive_vk(callback: types.CallbackQuery):
-    await callback.answer("🔄 Проверка...", show_alert=False)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['progress']}'>🔄</tg-emoji> Проверка...", show_alert=False)
     deleted = await clean_invalid_vk_accounts(callback.from_user.id)
-    await callback.answer(f"🧹 Удалено неактивных: {deleted}", show_alert=True)
+    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['sent']}'>🧹</tg-emoji> Удалено неактивных: {deleted}", show_alert=True)
     await callback.message.delete()
     await list_vk_accounts(callback)
 
@@ -793,28 +791,28 @@ async def clean_inactive_vk(callback: types.CallbackQuery):
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите текст рассылки:")
+    await callback.message.answer("Введите текст рассылки:", parse_mode="HTML")
     await state.set_state(BroadcastTG.waiting_text)
     await callback.answer()
 
 @dp.message(BroadcastTG.waiting_text)
 async def broadcast_tg_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text)
-    await message.answer("Задержка (сек):")
+    await message.answer("Задержка (сек):", parse_mode="HTML")
     await state.set_state(BroadcastTG.waiting_delay)
 
 @dp.message(BroadcastTG.waiting_delay)
 async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     if not raw:
-        await message.answer("❌ Введите число.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число.", parse_mode="HTML")
         return
     try:
         delay = float(raw.replace(',', '.'))
         if delay < 1:
             delay = 1
     except:
-        await message.answer("❌ Нужно число, например 5")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нужно число, например 5", parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -824,12 +822,12 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT session_file, phone, name FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ Аккаунт не найден")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Аккаунт не найден", parse_mode="HTML")
             await state.clear()
             return
         session_file, phone, acc_name = row["session_file"], row["phone"], row["name"]
 
-    status_msg = await message.answer(f"📲 *Аккаунт {acc_name} загружается...*", parse_mode="Markdown")
+    status_msg = await message.answer(f"<tg-emoji emoji-id='{EMOJI['tg_account']}'>📲</tg-emoji> <b>Аккаунт {acc_name} загружается...</b>", parse_mode="HTML")
     client = TelegramClient(session_file, API_ID, API_HASH)
     await client.connect()
     try:
@@ -837,7 +835,7 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         targets = [d for d in dialogs if d.is_user]
         total = len(targets)
         if total == 0:
-            await status_msg.edit_text("❌ Нет диалогов.")
+            await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нет диалогов.", parse_mode="HTML")
             return
         sent = 0
         errors = 0
@@ -851,14 +849,18 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
             await asyncio.sleep(delay)
         elapsed = time.time() - start_time
         success_rate = (sent / (sent+errors))*100 if sent+errors else 0
-        report = f"✅ *Рассылка TG завершена*\n📤 Отправлено: {sent}/{total}\n❌ Ошибок: {errors}\n📈 Успешность: {success_rate:.1f}%\n⏱️ Затрачено: {elapsed:.1f} сек."
-        await status_msg.edit_text(report, parse_mode="Markdown")
+        report = (f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> <b>Рассылка TG завершена</b>\n"
+                  f"<tg-emoji emoji-id='{EMOJI['sent']}'>📤</tg-emoji> Отправлено: {sent}/{total}\n"
+                  f"<tg-emoji emoji-id='{EMOJI['errors']}'>❌</tg-emoji> Ошибок: {errors}\n"
+                  f"<tg-emoji emoji-id='{EMOJI['progress']}'>📈</tg-emoji> Успешность: {success_rate:.1f}%\n"
+                  f"<tg-emoji emoji-id='{EMOJI['time']}'>⏱️</tg-emoji> Затрачено: {elapsed:.1f} сек.")
+        await status_msg.edit_text(report, parse_mode="HTML")
         await send_discord_log("📨 TG рассылка", f"Аккаунт: {acc_name}\nОтправлено: {sent}/{total}\nОшибок: {errors}", 0x00ff00 if errors==0 else 0xffaa00)
     except (AuthKeyError, UnauthorizedError):
         await deactivate_tg_account(message.from_user.id, acc_id, phone)
-        await status_msg.edit_text(f"❌ Аккаунт {phone} деактивирован.")
+        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Аккаунт {phone} деактивирован.", parse_mode="HTML")
     except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {get_russian_error(e)}")
+        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка: {get_russian_error(e)}", parse_mode="HTML")
     finally:
         await client.disconnect()
         await state.clear()
@@ -868,28 +870,28 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите текст рассылки:")
+    await callback.message.answer("Введите текст рассылки:", parse_mode="HTML")
     await state.set_state(BroadcastVK.waiting_text)
     await callback.answer()
 
 @dp.message(BroadcastVK.waiting_text)
 async def broadcast_vk_text(message: types.Message, state: FSMContext):
     await state.update_data(text=message.text)
-    await message.answer("Задержка (сек):")
+    await message.answer("Задержка (сек):", parse_mode="HTML")
     await state.set_state(BroadcastVK.waiting_delay)
 
 @dp.message(BroadcastVK.waiting_delay)
 async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     if not raw:
-        await message.answer("❌ Введите число.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число.", parse_mode="HTML")
         return
     try:
         delay = float(raw.replace(',', '.'))
         if delay < 1:
             delay = 1
     except:
-        await message.answer("❌ Нужно число, например 5")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нужно число, например 5", parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -899,48 +901,46 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
         if not row:
-            await message.answer("❌ Аккаунт не найден")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Аккаунт не найден", parse_mode="HTML")
             await state.clear()
             return
         token, vk_name, is_active = row["token"], row["vk_name"], row["is_active"]
 
     if not is_active:
-        await message.answer(f"❌ Аккаунт {vk_name} неактивен.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Аккаунт {vk_name} неактивен.", parse_mode="HTML")
         await state.clear()
         return
 
-    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+    status_msg = await message.answer(f"<tg-emoji emoji-id='{EMOJI['vk']}'>📲</tg-emoji> <b>Аккаунт {vk_name} загружается...</b>", parse_mode="HTML")
 
-    # ---- Правильное создание API ----
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
 
-    # Проверка токена
     try:
         vk.users.get()
     except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка авторизации VK: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
         return
 
-    # Собираем только друзей (беседы убираем, чтобы меньше ошибок)
     try:
         friends = vk.friends.get()["items"]
         total = len(friends)
         if total == 0:
-            await status_msg.edit_text("❌ Нет друзей для рассылки.")
+            await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нет друзей для рассылки.", parse_mode="HTML")
             await state.clear()
             return
     except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
+        await status_msg.edit_text(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Ошибка получения друзей: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
         return
 
     await status_msg.edit_text(
-        f"🚀 *Рассылка VK запущена*\n"
-        f"👥 Друзей: {total}\n"
-        f"⏱️ Задержка: {delay} сек\n\n"
-        f"✅ Отправлено: 0/{total} (0%)"
+        f"<tg-emoji emoji-id='{EMOJI['progress_start']}'>🚀</tg-emoji> <b>Рассылка VK запущена</b>\n"
+        f"<tg-emoji emoji-id='{EMOJI['friends']}'>👥</tg-emoji> Друзей: {total}\n"
+        f"<tg-emoji emoji-id='{EMOJI['time']}'>⏱️</tg-emoji> Задержка: {delay} сек\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Отправлено: 0/{total} (0%)",
+        parse_mode="HTML"
     )
 
     sent = 0
@@ -958,19 +958,19 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
         bar_len = 20
         filled = int(bar_len * sent / total) if total else 0
-        bar_start = "<tg-emoji emoji-id='5992070292405491163'></tg-emoji>" * min(filled, 1)
-        bar_mid = "<tg-emoji emoji-id='5992304505562077058'></tg-emoji>" * max(0, filled - 2)
-        bar_end = "<tg-emoji emoji-id='5990346528756078499'></tg-emoji>" if filled == bar_len else ""
+        bar_start = f"<tg-emoji emoji-id='{EMOJI['progress_start']}'>🟢</tg-emoji>" * min(filled, 1)
+        bar_mid = f"<tg-emoji emoji-id='{EMOJI['progress_mid']}'>🟡</tg-emoji>" * max(0, filled - 2)
+        bar_end = f"<tg-emoji emoji-id='{EMOJI['progress_end']}'>🔴</tg-emoji>" if filled == bar_len else ""
         bar = bar_start + bar_mid + "⬜" * (bar_len - filled) + bar_end
         text_status = (
-            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> <b>Рассылка VK в процессе</b>\n\n"
-            f"<tg-emoji emoji-id='{EMOJI['chats']}'></tg-emoji> Всего: {total}\n"
-            f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}\n"
-            f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибок: {errors}\n"
-            f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
-            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Прогресс: {percent:.1f}%\n"
+            f"<tg-emoji emoji-id='{EMOJI['progress']}'>📊</tg-emoji> <b>Рассылка VK в процессе</b>\n\n"
+            f"<tg-emoji emoji-id='{EMOJI['chats']}'>💬</tg-emoji> Всего: {total}\n"
+            f"<tg-emoji emoji-id='{EMOJI['sent']}'>📤</tg-emoji> Отправлено: {sent}\n"
+            f"<tg-emoji emoji-id='{EMOJI['errors']}'>❌</tg-emoji> Ошибок: {errors}\n"
+            f"<tg-emoji emoji-id='{EMOJI['friends']}'>👥</tg-emoji> Пропущено: {skipped}\n"
+            f"<tg-emoji emoji-id='{EMOJI['progress']}'>📊</tg-emoji> Прогресс: {percent:.1f}%\n"
             f"{bar}\n"
-            f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Осталось ~ {remaining_sec:.0f} сек"
+            f"<tg-emoji emoji-id='{EMOJI['time']}'>⏱️</tg-emoji> Осталось ~ {remaining_sec:.0f} сек"
         )
         await status_msg.edit_text(text_status, parse_mode="HTML")
 
@@ -982,12 +982,11 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
-            # Пропускаем недоступных – они не считаются ошибками
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
                 errors += 1
-        except Exception as e:
+        except Exception:
             errors += 1
 
         await asyncio.sleep(delay)
@@ -999,13 +998,13 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     elapsed = time.time() - start_time
     success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
     final_report = (
-        f"<tg-emoji emoji-id='{EMOJI['progress_end']}'></tg-emoji> <b>Спам VK завершен!</b>\n\n"
-        f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}/{total}\n"
-        f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Успешно: {sent}\n"
-        f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибки: {errors}\n"
-        f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
-        f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Успешность: {success_rate:.1f}%\n"
-        f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Время: {elapsed:.1f} сек."
+        f"<tg-emoji emoji-id='{EMOJI['progress_end']}'>🎉</tg-emoji> <b>Спам VK завершен!</b>\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['sent']}'>📤</tg-emoji> Отправлено: {sent}/{total}\n"
+        f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Успешно: {sent}\n"
+        f"<tg-emoji emoji-id='{EMOJI['errors']}'>❌</tg-emoji> Ошибки: {errors}\n"
+        f"<tg-emoji emoji-id='{EMOJI['friends']}'>👥</tg-emoji> Пропущено: {skipped}\n"
+        f"<tg-emoji emoji-id='{EMOJI['progress']}'>📊</tg-emoji> Успешность: {success_rate:.1f}%\n"
+        f"<tg-emoji emoji-id='{EMOJI['time']}'>⏱️</tg-emoji> Время: {elapsed:.1f} сек."
     )
     await status_msg.edit_text(final_report, parse_mode="HTML")
     gif = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
@@ -1053,7 +1052,7 @@ async def pay_balance(callback: types.CallbackQuery, state: FSMContext):
     if balance >= tariff["price"]:
         await update_balance(callback.from_user.id, -tariff["price"])
         await set_subscription(callback.from_user.id, tariff["days"])
-        await callback.message.edit_text(f"✅ Подписка на {tariff['name']} активирована!", reply_markup=main_menu(callback.from_user.id))
+        await callback.message.edit_text(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Подписка на {tariff['name']} активирована!", reply_markup=main_menu(callback.from_user.id), parse_mode="HTML")
     else:
         await callback.answer(f"Не хватает. Нужно {tariff['price']}$", show_alert=True)
     await state.clear()
@@ -1091,7 +1090,7 @@ async def check_sub_payment(callback: types.CallbackQuery):
             days = crypto_pending[callback.from_user.id]["days"]
             await set_subscription(callback.from_user.id, days)
             del crypto_pending[callback.from_user.id]
-            await callback.message.edit_text(f"✅ Подписка активирована на {days} дней!", reply_markup=main_menu(callback.from_user.id))
+            await callback.message.edit_text(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Подписка активирована на {days} дней!", reply_markup=main_menu(callback.from_user.id), parse_mode="HTML")
         else:
             await callback.message.edit_text("Оплата подтверждена", reply_markup=main_menu(callback.from_user.id))
     elif status == "pending":
@@ -1102,7 +1101,7 @@ async def check_sub_payment(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "deposit")
 async def deposit_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("💰 Сумма пополнения (мин 1$):")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> Сумма пополнения (мин 1$):", parse_mode="HTML")
     await state.set_state(Deposit.waiting_amount)
     await callback.answer()
 
@@ -1141,7 +1140,7 @@ async def check_dep_payment(callback: types.CallbackQuery):
             await update_balance(callback.from_user.id, amount)
             await send_discord_log("💎 Пополнение", f"Пользователь: {callback.from_user.id}\nСумма: {amount}$", 0x00ff00)
             del deposit_pending[callback.from_user.id]
-            await callback.message.edit_text(f"✅ Пополнение на {amount}$ успешно!", reply_markup=main_menu(callback.from_user.id))
+            await callback.message.edit_text(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Пополнение на {amount}$ успешно!", reply_markup=main_menu(callback.from_user.id), parse_mode="HTML")
         else:
             await callback.message.edit_text("Ошибка", reply_markup=main_menu(callback.from_user.id))
     elif status == "pending":
@@ -1152,7 +1151,7 @@ async def check_dep_payment(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("💰 Сумма вывода (мин 1$):")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> Сумма вывода (мин 1$):", parse_mode="HTML")
     await state.set_state(Withdraw.waiting_amount)
     await callback.answer()
 
@@ -1161,17 +1160,17 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.strip())
         if amount < 1:
-            await message.answer("❌ Минимальная сумма вывода 1$")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Минимальная сумма вывода 1$", parse_mode="HTML")
             return
         balance = await get_balance(message.from_user.id)
         if amount > balance:
-            await message.answer(f"❌ Не хватает. Баланс: {balance:.2f}$")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Не хватает. Баланс: {balance:.2f}$", parse_mode="HTML")
             return
         await state.update_data(amount=amount)
-        await message.answer("💳 Адрес кошелька USDT TRC20:")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💳</tg-emoji> Адрес кошелька USDT TRC20:", parse_mode="HTML")
         await state.set_state(Withdraw.waiting_wallet)
     except:
-        await message.answer("❌ Введите число")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число", parse_mode="HTML")
 
 @dp.message(Withdraw.waiting_wallet)
 async def withdraw_wallet(message: types.Message, state: FSMContext):
@@ -1179,7 +1178,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     data = await state.get_data()
     amount = data["amount"]
     await add_withdraw_request(message.from_user.id, amount, wallet)
-    await message.answer(f"✅ Заявка на вывод {amount}$ создана", reply_markup=main_menu(message.from_user.id))
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Заявка на вывод {amount}$ создана", reply_markup=main_menu(message.from_user.id), parse_mode="HTML")
     await bot.send_message(ADMIN_ID, f"📥 Заявка от {message.from_user.id}\nСумма: {amount}$\nКошелёк: {wallet}")
     await send_discord_log("💰 Заявка на вывод", f"Пользователь: {message.from_user.id}\nСумма: {amount}$", 0xffa500)
     await state.clear()
@@ -1188,7 +1187,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer("❌ Нет доступа", show_alert=True)
+        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Нет доступа", show_alert=True)
         return
     await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
     await callback.answer()
@@ -1209,7 +1208,7 @@ async def admin_give_sub_user(message: types.Message, state: FSMContext):
         await message.answer("Введите количество ДНЕЙ подписки:")
         await state.set_state(AdminGiveSubscription.waiting_days)
     except:
-        await message.answer("❌ Введите число (ID)")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число (ID)", parse_mode="HTML")
 
 @dp.message(AdminGiveSubscription.waiting_days)
 async def admin_give_sub_days(message: types.Message, state: FSMContext):
@@ -1220,11 +1219,11 @@ async def admin_give_sub_days(message: types.Message, state: FSMContext):
         data = await state.get_data()
         user_id = data["user_id"]
         await set_subscription(user_id, days)
-        await message.answer(f"✅ Пользователю {user_id} выдана подписка на {days} дней.")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Пользователю {user_id} выдана подписка на {days} дней.", parse_mode="HTML")
         await bot.send_message(user_id, f"🎁 Администратор выдал подписку на {days} дней!")
         await state.clear()
     except:
-        await message.answer("❌ Введите положительное число")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите положительное число", parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_add_balance")
 async def admin_add_balance_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1242,7 +1241,7 @@ async def admin_add_balance_user(message: types.Message, state: FSMContext):
         await message.answer("Введите сумму пополнения (в долларах):")
         await state.set_state(AdminAddBalance.waiting_amount)
     except:
-        await message.answer("❌ Введите число (ID)")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число (ID)", parse_mode="HTML")
 
 @dp.message(AdminAddBalance.waiting_amount)
 async def admin_add_balance_amount(message: types.Message, state: FSMContext):
@@ -1253,11 +1252,11 @@ async def admin_add_balance_amount(message: types.Message, state: FSMContext):
         data = await state.get_data()
         user_id = data["user_id"]
         await update_balance(user_id, amount)
-        await message.answer(f"✅ Пользователю {user_id} начислено {amount}$")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Пользователю {user_id} начислено {amount}$", parse_mode="HTML")
         await bot.send_message(user_id, f"💰 Вам начислено {amount}$")
         await state.clear()
     except:
-        await message.answer("❌ Введите положительное число")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите положительное число", parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_remove_balance")
 async def admin_remove_balance_start(callback: types.CallbackQuery, state: FSMContext):
@@ -1275,7 +1274,7 @@ async def admin_remove_balance_user(message: types.Message, state: FSMContext):
         await message.answer("Введите сумму списания (в долларах):")
         await state.set_state(AdminRemoveBalance.waiting_amount)
     except:
-        await message.answer("❌ Введите число (ID)")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите число (ID)", parse_mode="HTML")
 
 @dp.message(AdminRemoveBalance.waiting_amount)
 async def admin_remove_balance_amount(message: types.Message, state: FSMContext):
@@ -1287,14 +1286,14 @@ async def admin_remove_balance_amount(message: types.Message, state: FSMContext)
         user_id = data["user_id"]
         current = await get_balance(user_id)
         if current < amount:
-            await message.answer(f"❌ Недостаточно. Баланс: {current}$")
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Недостаточно. Баланс: {current}$", parse_mode="HTML")
             return
         await update_balance(user_id, -amount)
-        await message.answer(f"✅ У пользователя {user_id} списано {amount}$")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> У пользователя {user_id} списано {amount}$", parse_mode="HTML")
         await bot.send_message(user_id, f"⚠️ Списано {amount}$")
         await state.clear()
     except:
-        await message.answer("❌ Введите положительное число")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Введите положительное число", parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_withdraws")
 async def admin_withdraws(callback: types.CallbackQuery):
@@ -1390,7 +1389,7 @@ async def create_promo_max_uses(message: types.Message, state: FSMContext):
             raise ValueError
         data = await state.get_data()
         await create_promocode(data["code"], data["days"], max_uses)
-        await message.answer(f"✅ Промокод {data['code']} создан!")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Промокод {data['code']} создан!", parse_mode="HTML")
         await state.clear()
     except:
         await message.answer("Введите число от 1")
@@ -1441,22 +1440,22 @@ async def activate_promo_exec(message: types.Message, state: FSMContext):
     promo = await get_promocode(code)
     user_id = message.from_user.id
     if not promo:
-        await message.answer("❌ Неверный промокод")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Неверный промокод", parse_mode="HTML")
         await state.clear()
         return
     async with db_pool.acquire() as conn:
         used = await conn.fetchval("SELECT 1 FROM used_promocodes WHERE user_id=$1 AND code_id=$2", user_id, promo["id"])
     if used:
-        await message.answer("❌ Вы уже активировали этот промокод")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Вы уже активировали этот промокод", parse_mode="HTML")
         await state.clear()
         return
     if promo["uses"] >= promo["max_uses"]:
-        await message.answer("❌ Промокод больше не действителен")
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'>❌</tg-emoji> Промокод больше не действителен", parse_mode="HTML")
         await state.clear()
         return
     await use_promocode(user_id, promo["id"])
     await set_subscription(user_id, promo["days"])
-    await message.answer(f"✅ Активирован! +{promo['days']} дней подписки.")
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Активирован! +{promo['days']} дней подписки.", parse_mode="HTML")
     await bot.send_message(ADMIN_ID, f"🎫 {user_id} активировал {code}")
     await send_discord_log("🎫 Промокод", f"Пользователь: {user_id}\nКод: {code}", 0x00aaFF)
     await state.clear()
@@ -1524,26 +1523,26 @@ async def admin_extended_stats(callback: types.CallbackQuery):
         vk_total = await conn.fetchval("SELECT COUNT(*) FROM vk_accounts")
         vk_active = await conn.fetchval("SELECT COUNT(*) FROM vk_accounts WHERE is_active=True")
     text = (
-        f"📊 **Расширенная статистика бота**\n\n"
-        f"👥 **Пользователи:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['progress']}'>📊</tg-emoji> <b>Расширенная статистика бота</b>\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['friends']}'>👥</tg-emoji> <b>Пользователи:</b>\n"
         f"• Всего: {total_users}\n"
         f"• Активных подписок: {active_subs}\n"
         f"• Зарегистрировались за 24ч: {day_reg}\n"
         f"• За 7 дней: {week_reg}\n"
         f"• За 30 дней: {month_reg}\n\n"
-        f"💰 **Балансы:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>Балансы:</b>\n"
         f"• Общая сумма: {total_bal:.2f}$\n"
         f"• Средний баланс: {avg_bal:.2f}$\n"
         f"• С положительным балансом: {pos_bal}\n\n"
-        f"💸 **Выводы:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['crypto']}'>💸</tg-emoji> <b>Выводы:</b>\n"
         f"• Выплачено всего: {approved_withdraw:.2f}$\n"
         f"• Ожидает выплаты: {pending_withdraw:.2f}$\n\n"
-        f"🎫 **Промокоды:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['welcome']}'>🎫</tg-emoji> <b>Промокоды:</b>\n"
         f"• Активаций: {promo_used}\n"
         f"• Средняя длительность: {avg_promo_days:.1f} дней\n\n"
-        f"📱 **Telegram аккаунты:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['tg_account']}'>📱</tg-emoji> <b>Telegram аккаунты:</b>\n"
         f"• Всего: {tg_total}, активных: {tg_active}\n\n"
-        f"📘 **VK аккаунты:**\n"
+        f"<tg-emoji emoji-id='{EMOJI['vk']}'>📘</tg-emoji> <b>VK аккаунты:</b>\n"
         f"• Всего: {vk_total}, активных: {vk_active}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1551,7 +1550,7 @@ async def admin_extended_stats(callback: types.CallbackQuery):
          InlineKeyboardButton(text="⏳ Топ подписок", callback_data="admin_top_sub")],
         [InlineKeyboardButton(text="🔙 Назад в админку", callback_data="admin_panel")]
     ])
-    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_top_balance")
@@ -1560,10 +1559,10 @@ async def admin_top_balance(callback: types.CallbackQuery):
     if not top:
         text = "Нет пользователей с балансом > 0"
     else:
-        text = "🏆 **Топ-10 по балансу**\n\n"
+        text = f"<tg-emoji emoji-id='{EMOJI['crypto']}'>🏆</tg-emoji> <b>Топ-10 по балансу</b>\n\n"
         for i, u in enumerate(top, 1):
             text += f"{i}. {u['username'] or u['tg_id']} — {u['balance']:.2f}$\n"
-    await callback.message.edit_text(text, reply_markup=back_button("admin_ext_stats"))
+    await callback.message.edit_text(text, reply_markup=back_button("admin_ext_stats"), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_top_sub")
@@ -1572,11 +1571,11 @@ async def admin_top_subscription(callback: types.CallbackQuery):
     if not top:
         text = "Нет активных подписок"
     else:
-        text = "⏳ **Топ-10 по длительности подписки**\n\n"
+        text = f"<tg-emoji emoji-id='{EMOJI['time']}'>⏳</tg-emoji> <b>Топ-10 по длительности подписки</b>\n\n"
         for i, u in enumerate(top, 1):
             until = datetime.fromtimestamp(u["sub_until"]).strftime('%d.%m.%Y')
             text += f"{i}. {u['username'] or u['tg_id']} — до {until}\n"
-    await callback.message.edit_text(text, reply_markup=back_button("admin_ext_stats"))
+    await callback.message.edit_text(text, reply_markup=back_button("admin_ext_stats"), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_export_csv")
@@ -1594,7 +1593,7 @@ async def admin_export_csv(callback: types.CallbackQuery):
     for r in rows:
         writer.writerow([r["tg_id"], r["username"], r["registered"], r["balance"], r["sub_until"]])
     csv_content = output.getvalue().encode('utf-8')
-    await callback.message.answer_document(BufferedInputFile(csv_content, filename="users_export.csv"), caption="📥 Экспорт пользователей")
+    await callback.message.answer_document(BufferedInputFile(csv_content, filename="users_export.csv"), caption=f"<tg-emoji emoji-id='{EMOJI['success']}'>📥</tg-emoji> Экспорт пользователей", parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_balance_manage")
@@ -1618,19 +1617,19 @@ async def admin_broadcast_stats(callback: types.CallbackQuery):
         total_sent = await conn.fetchval("SELECT COALESCE(SUM(sent),0) FROM broadcast_logs")
         total_friends = await conn.fetchval("SELECT COALESCE(SUM(friends_count),0) FROM broadcast_logs WHERE account_type='vk'")
         total_chats = await conn.fetchval("SELECT COALESCE(SUM(chats_count),0) FROM broadcast_logs WHERE account_type='vk'")
-        text = (f"📊 **Статистика всех рассылок**\n\n"
-                f"📨 Всего запусков: {total_broadcasts}\n"
-                f"👥 Всего контактов обработано: {total_contacts}\n"
-                f"✅ Отправлено сообщений: {total_sent}\n"
-                f"📘 Из них:\n"
+        text = (f"<tg-emoji emoji-id='{EMOJI['progress']}'>📊</tg-emoji> <b>Статистика всех рассылок</b>\n\n"
+                f"<tg-emoji emoji-id='{EMOJI['sent']}'>📨</tg-emoji> Всего запусков: {total_broadcasts}\n"
+                f"<tg-emoji emoji-id='{EMOJI['friends']}'>👥</tg-emoji> Всего контактов обработано: {total_contacts}\n"
+                f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Отправлено сообщений: {total_sent}\n"
+                f"<tg-emoji emoji-id='{EMOJI['vk']}'>📘</tg-emoji> Из них:\n"
                 f"   • Друзей VK: {total_friends}\n"
                 f"   • Бесед VK: {total_chats}\n")
         top_users = await conn.fetch("SELECT user_id, SUM(total_contacts) as total FROM broadcast_logs GROUP BY user_id ORDER BY total DESC LIMIT 5")
         if top_users:
-            text += "\n🏆 **Топ пользователей по проливу:**\n"
+            text += f"\n<tg-emoji emoji-id='{EMOJI['crypto']}'>🏆</tg-emoji> <b>Топ пользователей по проливу:</b>\n"
             for u in top_users:
                 text += f"• ID {u['user_id']} — {u['total']} контактов\n"
-    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"))
+    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_broadcast")
@@ -1670,7 +1669,7 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
         except:
             pass
         await asyncio.sleep(0.5)
-    await message.answer(f"✅ Отправлено {sent} из {total}")
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Отправлено {sent} из {total}", parse_mode="HTML")
     await send_discord_log("📢 Глобальная рассылка", f"Отправлено {sent} из {total}", 0x9b59b6)
     await state.clear()
 
@@ -1678,30 +1677,30 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "help")
 async def help_menu(callback: types.CallbackQuery):
     text = (
-        "❓ *ПОМОЩЬ И ИНСТРУКЦИЯ*\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['info']}'>❓</tg-emoji> <b>ПОМОЩЬ И ИНСТРУКЦИЯ</b>\n\n"
         "┌─────────────────────────────────┐\n"
-        "│  💰 *БАЛАНС*                       │\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['crypto']}'>💰</tg-emoji> <b>БАЛАНС</b>                       │\n"
         "│  Пополнение через CryptoBot      │\n"
         "│  (USDT). Вывод от 1$ на кошелёк. │\n"
         "├─────────────────────────────────┤\n"
-        "│  📢 *РАССЫЛКИ*                    │\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['sent']}'>📢</tg-emoji> <b>РАССЫЛКИ</b>                    │\n"
         "│  Добавь свои Telegram/VK аккаунты,│\n"
         "│  пиши сообщения, настраивай задержку.│\n"
         "├─────────────────────────────────┤\n"
-        "│  💎 *ПОДПИСКА*                    │\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['welcome']}'>💎</tg-emoji> <b>ПОДПИСКА</b>                    │\n"
         "│  Даёт доступ к рассылкам.        │\n"
         "├─────────────────────────────────┤\n"
-        "│  🔧 *ТЕХПОДДЕРЖКА*                │\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['token_input']}'>🔧</tg-emoji> <b>ТЕХПОДДЕРЖКА</b>                │\n"
         "│  @bloodworn                      │\n"
         "└─────────────────────────────────┘\n\n"
-        "✨ *Удачи в использовании!*"
+        "✨ <b>Удачи в использовании!</b>"
     )
-    await callback.message.edit_text(text, reply_markup=back_button("main_menu"), parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=back_button("main_menu"), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(F.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("✍️ **Напишите ваш вопрос.**\nАдминистратор ответит в этом чате.")
+    await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['info']}'>✍️</tg-emoji> <b>Напишите ваш вопрос.</b>\nАдминистратор ответит в этом чате.", parse_mode="HTML")
     await state.set_state(Support.waiting_question)
     await callback.answer()
 
@@ -1711,7 +1710,7 @@ async def support_send_question(message: types.Message, state: FSMContext):
         ticket_id = await conn.fetchval("INSERT INTO support_tickets (user_id, created_at) VALUES ($1, $2) RETURNING id", message.from_user.id, int(time.time()))
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 ОТВЕТИТЬ", callback_data=f"reply_ticket_{ticket_id}_{message.from_user.id}")]])
     await bot.send_message(ADMIN_ID, f"🆕 **Новый тикет #{ticket_id}**\nОт: {message.from_user.id}\n\n{message.text}", reply_markup=kb)
-    await message.answer(f"✅ Ваше сообщение отправлено администратору (Тикет #{ticket_id}).\nОжидайте ответа.")
+    await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'>✅</tg-emoji> Ваше сообщение отправлено администратору (Тикет #{ticket_id}).\nОжидайте ответа.", parse_mode="HTML")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("reply_ticket_"))
@@ -1742,7 +1741,7 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "vk_tutorial")
 async def vk_tutorial(callback: types.CallbackQuery):
     text = (
-        f"<tg-emoji emoji-id='{EMOJI['token_input']}'></tg-emoji> <b>КАК ПОЛУЧИТЬ VK ТОКЕН</b>\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['token_input']}'>🔑</tg-emoji> <b>КАК ПОЛУЧИТЬ VK ТОКЕН</b>\n\n"
         "1️⃣ Перейдите на сайт: https://vkhost.github.io\n"
         "2️⃣ Выберите <b>VK Admin</b>\n"
         "3️⃣ Нажмите «Разрешить»\n"
@@ -1750,17 +1749,20 @@ async def vk_tutorial(callback: types.CallbackQuery):
         "5️⃣ Скопируйте токен (начинается с <code>vk1.a.</code>)\n"
         "6️⃣ Вернитесь в бот, нажмите <b>➕ ДОБАВИТЬ VK</b>\n"
         "7️⃣ Вставьте токен одним сообщением\n\n"
-        f"<tg-emoji emoji-id='{EMOJI['blocked']}'></tg-emoji> Если не работает – получите новый.\n"
-        f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> Вопросы – в поддержку."
+        f"<tg-emoji emoji-id='{EMOJI['blocked']}'>🚫</tg-emoji> Если не работает – получите новый.\n"
+        f"<tg-emoji emoji-id='{EMOJI['info']}'>ℹ️</tg-emoji> Вопросы – в поддержку."
     )
     await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
     await callback.answer()
 
 @dp.message(Command("test_emoji"))
 async def test_emoji(message: types.Message):
-    # ID из вашего словаря EMOJI – приветствие
-    await message.answer('<tg-emoji emoji-id="5278611606756942667"></tg-emoji> Это премиум-эмодзи', parse_mode="HTML")
-
+    text = (
+        f'<tg-emoji emoji-id="{EMOJI["welcome"]}">👋</tg-emoji> <b>Приветствие</b>\n'
+        f'<tg-emoji emoji-id="{EMOJI["success"]}">✅</tg-emoji> <b>Успех</b>\n'
+        f'<tg-emoji emoji-id="{EMOJI["error"]}">❌</tg-emoji> <b>Ошибка</b>'
+    )
+    await message.answer(text, parse_mode="HTML")
 
 # ------------------- ЗАПУСК -------------------
 async def main():
