@@ -139,6 +139,8 @@ async def init_db():
                 closed_at BIGINT DEFAULT 0
             )
         ''')
+
+        await conn.execute('ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS closed_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
 
 # ------------------- ПОЛЬЗОВАТЕЛИ -------------------
