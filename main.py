@@ -1758,10 +1758,18 @@ async def vk_tutorial(callback: types.CallbackQuery):
 
 @dp.message(Command("test_emoji"))
 async def test_emoji(message: types.Message):
-    await message.answer(
-        '<tg-emoji emoji-id="5465538874220489549"></tg-emoji> Проверка премиум-эмодзи',
-        parse_mode="HTML"
+    # Используем существующий словарь EMOJI
+    test_text = (
+        f"<tg-emoji emoji-id=\"{EMOJI['welcome']}\"></tg-emoji> <b>Приветствие</b>\n"
+        f"<tg-emoji emoji-id=\"{EMOJI['success']}\"></tg-emoji> <b>Успех</b>\n"
+        f"<tg-emoji emoji-id=\"{EMOJI['error']}\"></tg-emoji> <b>Ошибка</b>\n"
+        f"<tg-emoji emoji-id=\"{EMOJI['tg_account']}\"></tg-emoji> <b>Telegram аккаунт</b>\n"
+        f"<tg-emoji emoji-id=\"{EMOJI['vk']}\"></tg-emoji> <b>VK</b>\n"
+        f"<tg-emoji emoji-id=\"{EMOJI['progress']}\"></tg-emoji> <b>Прогресс</b>\n\n"
+        f"Если вы видите анимированные/стилизованные иконки — премиум-эмодзи работают.\n"
+        f"Если видите квадратики или обычные символы — у вас нет Telegram Premium."
     )
+    await message.answer(test_text, parse_mode="HTML")
 
 
 # ------------------- ЗАПУСК -------------------
