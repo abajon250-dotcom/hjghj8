@@ -1758,13 +1758,8 @@ async def vk_tutorial(callback: types.CallbackQuery):
 
 @dp.message(Command("test_emoji"))
 async def test_emoji(message: types.Message):
-    # Используем ID из твоего словаря EMOJI
-    text = (
-        f'<tg-emoji emoji-id="{EMOJI["welcome"]}"></tg-emoji> <b>Приветствие</b>\n'
-        f'<tg-emoji emoji-id="{EMOJI["success"]}"></tg-emoji> <b>Успех</b>\n'
-        f'<tg-emoji emoji-id="{EMOJI["error"]}"></tg-emoji> <b>Ошибка</b>'
-    )
-    await message.answer(text, parse_mode="HTML")   # ← ОБЯЗАТЕЛЬНО
+    # ID из вашего словаря EMOJI – приветствие
+    await message.answer('<tg-emoji emoji-id="5278611606756942667"></tg-emoji> Это премиум-эмодзи', parse_mode="HTML")
 
 
 # ------------------- ЗАПУСК -------------------
