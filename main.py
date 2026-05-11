@@ -1759,7 +1759,7 @@ async def vk_tutorial(callback: types.CallbackQuery):
 @dp.message(Command("test_emoji"))
 async def test_emoji(message: types.Message):
     await message.answer(
-        '<tg-emoji emoji-id="5906581476639513176"></tg-emoji> Проверка премиум-эмодзи',
+        '<tg-emoji emoji-id="5465538874220489549"></tg-emoji> Проверка премиум-эмодзи',
         parse_mode="HTML"
     )
 
