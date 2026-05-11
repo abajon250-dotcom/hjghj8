@@ -426,6 +426,7 @@ class AdminCreatePromocode(StatesGroup): waiting_code = State(); waiting_days = 
 class ActivatePromo(StatesGroup): waiting_code = State()
 class Support(StatesGroup): waiting_question = State(); waiting_reply = State()
 class MassVK(StatesGroup): waiting_tokens = State()
+class AdminBroadcast(StatesGroup): waiting_text = State(); waiting_confirm = State()
 
 # ------------------- БОТ -------------------
 bot = Bot(token=BOT_TOKEN)
