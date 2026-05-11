@@ -10,7 +10,7 @@ import random
 import asyncpg
 import aiohttp
 
-# ---------- Премиум эмодзи ----------
+# ---------- Премиум эмодзи (ваши ID) ----------
 EMOJI = {
     "tg_account": "5471949924658588235",
     "vk": "5472096095280572227",
@@ -78,7 +78,7 @@ ERROR_GIF_URL = "https://i.gifer.com/84OP.gif"
 
 db_pool = None
 
-# ------------------- БАЗА ДАННЫХ (инициализация) -------------------
+# ------------------- БАЗА ДАННЫХ -------------------
 async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), command_timeout=60)
@@ -164,18 +164,7 @@ async def init_db():
                 closed_at BIGINT DEFAULT 0
             )
         ''')
-        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS added_at BIGINT DEFAULT 0')
-        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS vk_id BIGINT DEFAULT 0')
-        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS vk_screen_name TEXT DEFAULT ""')
         await conn.execute('ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS closed_at BIGINT DEFAULT 0')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_broadcast_tasks (
-                id SERIAL PRIMARY KEY,
-                message TEXT,
-                created_at BIGINT,
-                status TEXT DEFAULT 'pending'
-            )
-        ''')
     print("✅ PostgreSQL ready")
 
 # ------------------- ПОЛЬЗОВАТЕЛИ -------------------
@@ -228,17 +217,14 @@ async def set_active_tg_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE owner_tg_id=$1", owner_tg_id)
         await conn.execute("UPDATE tg_accounts SET is_active=TRUE, last_used=$1 WHERE id=$2 AND owner_tg_id=$3", int(time.time()), account_id, owner_tg_id)
-    await send_discord_log("✅ TG аккаунт активирован", f"Владелец: {owner_tg_id}\nАккаунт ID: {account_id}", 0x00ff00)
 
 async def delete_tg_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM tg_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-    await send_discord_log("🗑 TG аккаунт удалён", f"Владелец: {owner_tg_id}\nАккаунт ID: {account_id}", 0xff0000)
 
 async def deactivate_tg_account(owner_tg_id: int, account_id: int, phone: str = ""):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE tg_accounts SET is_active=FALSE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-    await send_discord_log("⚠️ TG аккаунт деактивирован", f"Владелец: {owner_tg_id}\nАккаунт: {phone}", 0xff0000)
 
 # ------------------- VK АККАУНТЫ (расширенные) -------------------
 async def add_vk_account(owner_tg_id: int, token: str, vk_name: str, added_at: int = None, vk_id: int = 0, screen_name: str = "") -> int:
@@ -260,12 +246,10 @@ async def set_active_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE vk_accounts SET is_active=FALSE WHERE owner_tg_id=$1", owner_tg_id)
         await conn.execute("UPDATE vk_accounts SET is_active=TRUE WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-    await send_discord_log("✅ VK аккаунт активирован", f"Владелец: {owner_tg_id}\nАккаунт ID: {account_id}", 0x00ff00)
 
 async def delete_vk_account(owner_tg_id: int, account_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", account_id, owner_tg_id)
-    await send_discord_log("🗑 VK аккаунт удалён", f"Владелец: {owner_tg_id}\nАккаунт ID: {account_id}", 0xff0000)
 
 # ------------------- АДМИН -------------------
 async def get_all_users():
@@ -290,7 +274,6 @@ async def update_withdraw_status(req_id: int, status: str):
 async def create_promocode(code: str, days: int, max_uses: int = 1):
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO promocodes (code, days, max_uses) VALUES ($1,$2,$3)", code, days, max_uses)
-    await send_discord_log("🎫 Создан промокод", f"Код: {code}\nДней: {days}\nМакс использований: {max_uses}", 0x00aaff)
 
 async def get_promocode(code: str):
     async with db_pool.acquire() as conn:
@@ -364,6 +347,7 @@ async def is_subscribed_to_channel(user_id: int) -> bool:
     except:
         return False
 
+# ------------------- DISCORD ЛОГИ -------------------
 async def send_discord_log(title: str, description: str, color: int = 0x00ff00):
     if not DISCORD_WEBHOOK_URL:
         return
@@ -450,7 +434,6 @@ async def vk_accounts_list(user_id: int):
     kb = []
     for acc in accounts:
         status = "✅" if acc["is_active"] else "❌"
-        # Можно добавить краткую информацию о дате добавления в текст кнопки (не обязательно)
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
     kb.append([InlineKeyboardButton(text="🧹 ОЧИСТИТЬ НЕАКТИВНЫЕ", callback_data="clean_inactive_vk")])
@@ -458,7 +441,7 @@ async def vk_accounts_list(user_id: int):
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# ------------------- FSM СОСТОЯНИЯ -------------------
+# ------------------- FSM -------------------
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
 class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State()
@@ -503,7 +486,7 @@ async def check_sub_start(callback: types.CallbackQuery):
         await callback.message.delete()
         await start_cmd(callback.message)
     else:
-        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Вы не подписаны", show_alert=True)
+        await callback.answer("❌ Вы не подписаны", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -589,14 +572,14 @@ async def tg_account_actions(callback: types.CallbackQuery):
 async def tg_set_active(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[3])
     await set_active_tg_account(callback.from_user.id, acc_id)
-    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Активен", show_alert=True)
+    await callback.answer("✅ Активен", show_alert=True)
     await list_tg_accounts(callback)
 
 @dp.callback_query(F.data.startswith("tg_del_"))
 async def tg_delete(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[2])
     await delete_tg_account(callback.from_user.id, acc_id)
-    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Удалён", show_alert=True)
+    await callback.answer("Удалён", show_alert=True)
     await list_tg_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_acc_"))
@@ -620,21 +603,21 @@ async def vk_account_actions(callback: types.CallbackQuery):
 async def vk_set_active(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[3])
     await set_active_vk_account(callback.from_user.id, acc_id)
-    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Аккаунт активен", show_alert=True)
+    await callback.answer("Аккаунт активен", show_alert=True)
     await list_vk_accounts(callback)
 
 @dp.callback_query(F.data.startswith("vk_del_"))
 async def vk_delete(callback: types.CallbackQuery):
     acc_id = int(callback.data.split("_")[2])
     await delete_vk_account(callback.from_user.id, acc_id)
-    await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Удалён", show_alert=True)
+    await callback.answer("Удалён", show_alert=True)
     await list_vk_accounts(callback)
 
 # ------------------- ДОБАВЛЕНИЕ TG -------------------
 @dp.callback_query(F.data == "add_tg")
 async def add_tg_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нужна подписка!", show_alert=True)
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['phone']}'></tg-emoji> Введите номер телефона (+79991234567):", parse_mode="HTML")
     await state.set_state(AddTG.waiting_phone)
@@ -676,7 +659,7 @@ async def add_tg_code(message: types.Message, state: FSMContext):
         await state.clear()
         await send_discord_log("➕ Добавлен Telegram аккаунт", f"Пользователь: {message.from_user.id}\nАккаунт: {name}", 0x00ff00)
     except SessionPasswordNeededError:
-        await message.answer(f"<tg-emoji emoji-id='{EMOJI['blocked']}'></tg-emoji> Введите 2FA пароль:", parse_mode="HTML")
+        await message.answer("🔒 Введите 2FA пароль:")
         await state.set_state(AddTG.waiting_2fa)
     except Exception as e:
         await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Ошибка: {get_russian_error(e)}", parse_mode="HTML")
@@ -705,11 +688,11 @@ async def add_tg_2fa(message: types.Message, state: FSMContext):
         await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Ошибка 2FA: {get_russian_error(e)}", parse_mode="HTML")
         await state.clear()
 
-# ------------------- ДОБАВЛЕНИЕ VK (расширенное: показывает ID, username, время) -------------------
+# ------------------- ДОБАВЛЕНИЕ VK (расширенное) -------------------
 @dp.callback_query(F.data == "add_vk")
 async def add_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нужна подписка!", show_alert=True)
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['token_input']}'></tg-emoji> Введите токен VK (access_token):", parse_mode="HTML")
     await state.set_state(AddVK.waiting_token)
@@ -726,8 +709,7 @@ async def add_vk_token(message: types.Message, state: FSMContext):
     try:
         vk_session = vk_api.VkApi(token=token)
         vk = vk_session.get_api()
-        user = vk.users.get()[0]
-
+        user = vk.users.get()[0]                     # получаем данные пользователя
         user_id_vk = user['id']
         screen_name = user.get('screen_name', '')
         first_name = user['first_name']
@@ -735,7 +717,7 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         name = f"{first_name} {last_name}"
         added_time = datetime.fromtimestamp(time.time()).strftime('%d.%m.%Y %H:%M:%S')
 
-        # Добавляем аккаунт с расширенной информацией
+        # Добавляем аккаунт с доп. полями
         acc_id = await add_vk_account(message.from_user.id, token, name,
                                       added_at=int(time.time()),
                                       vk_id=user_id_vk,
@@ -745,9 +727,12 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         async with db_pool.acquire() as conn:
             total_vk = await conn.fetchval("SELECT COUNT(*) FROM vk_accounts WHERE owner_tg_id=$1", message.from_user.id)
 
+        # Клавиатура
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
-             InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")],
+            [
+                InlineKeyboardButton(text="➕ ДОБАВИТЬ ЕЩЁ VK", callback_data="add_vk"),
+                InlineKeyboardButton(text="📨 НАЧАТЬ РАССЫЛКУ", callback_data=f"vk_broadcast_{acc_id}")
+            ],
             [InlineKeyboardButton(text="◀️ МОИ АККАУНТЫ", callback_data="my_accounts")]
         ])
 
@@ -762,6 +747,7 @@ async def add_vk_token(message: types.Message, state: FSMContext):
         await message.answer(info_text, reply_markup=kb, parse_mode="HTML")
         await state.clear()
 
+        # Discord лог (расширенный)
         await send_discord_log(
             title="➕ Добавлен VK аккаунт",
             description=(
@@ -769,7 +755,7 @@ async def add_vk_token(message: types.Message, state: FSMContext):
                 f"**Имя:** {name}\n"
                 f"**VK ID:** {user_id_vk}\n"
                 f"**Username:** {screen_name or '—'}\n"
-                f"**Время добавления:** {added_time}\n"
+                f"**Время:** {added_time}\n"
                 f"**Всего аккаунтов:** {total_vk}"
             ),
             color=0x00ff00
@@ -788,7 +774,7 @@ async def add_vk_token(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "mass_vk")
 async def mass_vk_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_platinum_subscribed(callback.from_user.id):
-        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нужна подписка!", show_alert=True)
+        await callback.answer("❌ Нужна подписка!", show_alert=True)
         return
     await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Введите список VK токенов через запятую (можно с пробелами).", parse_mode="HTML")
     await state.set_state(MassVK.waiting_tokens)
@@ -818,13 +804,12 @@ async def mass_vk_process(message: types.Message, state: FSMContext):
     result = f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Добавлено: {added}\n<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Ошибок: {len(errors)}"
     await message.answer(result, parse_mode="HTML")
     await state.clear()
-    await send_discord_log("📤 Массовое добавление VK", f"Пользователь: {message.from_user.id}\nДобавлено: {added}\nОшибок: {len(errors)}", 0x00ff00 if added > 0 else 0xff0000)
 
 # ------------------- ОЧИСТКА НЕАКТИВНЫХ VK -------------------
 async def clean_invalid_vk_accounts(user_id: int) -> int:
     deleted = 0
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id, token FROM vk_accounts WHERE owner_tg_id=$1", user_id)
+        rows = await conn.fetch("SELECT id, token, vk_name FROM vk_accounts WHERE owner_tg_id=$1", user_id)
         for row in rows:
             try:
                 vk = vk_api.VkApi(token=row["token"])
@@ -840,8 +825,7 @@ async def clean_inactive_vk(callback: types.CallbackQuery):
     deleted = await clean_invalid_vk_accounts(callback.from_user.id)
     await callback.answer(f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Удалено неактивных: {deleted}", show_alert=True)
     await callback.message.delete()
-    await list_vk_accounts(callback)
-    await send_discord_log("🧹 Очистка неактивных VK", f"Пользователь: {callback.from_user.id}\nУдалено: {deleted}", 0xffaa00)# ------------------- РАССЫЛКИ TG -------------------
+    await list_vk_accounts(callback)# ------------------- РАССЫЛКИ TG -------------------
 @dp.callback_query(F.data.startswith("tg_broadcast_"))
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
@@ -1241,7 +1225,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Нет доступа", show_alert=True)
+        await callback.answer("❌ Нет доступа", show_alert=True)
         return
     await callback.message.edit_text("👑 Админ-панель", reply_markup=admin_menu())
     await callback.answer()
@@ -1312,65 +1296,182 @@ async def admin_add_balance_amount(message: types.Message, state: FSMContext):
         await state.clear()
         await send_discord_log("💰 Начислен баланс", f"Пользователь: {user_id}\nСумма: {amount}$", 0x00ff00)
     except:
-        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите положительное число", parse_mode="HTML")# ------------------- УПРАВЛЕНИЕ БАЛАНСАМИ (админ) -------------------
-@dp.callback_query(F.data == "admin_balance_manage")
-async def admin_balance_manage(callback: types.CallbackQuery):
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите положительное число", parse_mode="HTML")# ------------------- АДМИН: СПИСАНИЕ БАЛАНСА -------------------
+@dp.callback_query(F.data == "admin_remove_balance")
+async def admin_remove_balance_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await callback.message.answer("Введите ID пользователя:")
+    await state.set_state(AdminRemoveBalance.waiting_user_id)
+    await callback.answer()
+
+@dp.message(AdminRemoveBalance.waiting_user_id)
+async def admin_remove_balance_user(message: types.Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        await state.update_data(user_id=user_id)
+        await message.answer("Введите сумму списания (в долларах):")
+        await state.set_state(AdminRemoveBalance.waiting_amount)
+    except:
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите число (ID)", parse_mode="HTML")
+
+@dp.message(AdminRemoveBalance.waiting_amount)
+async def admin_remove_balance_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            raise ValueError
+        data = await state.get_data()
+        user_id = data["user_id"]
+        current = await get_balance(user_id)
+        if current < amount:
+            await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Недостаточно. Баланс: {current}$", parse_mode="HTML")
+            return
+        await update_balance(user_id, -amount)
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> У пользователя {user_id} списано {amount}$", parse_mode="HTML")
+        await bot.send_message(user_id, f"⚠️ С вашего баланса списано {amount}$")
+        await state.clear()
+        await send_discord_log("💰 Списание баланса", f"Пользователь: {user_id}\nСумма: {amount}$", 0xffaa00)
+    except:
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите положительное число", parse_mode="HTML")
+
+# ------------------- АДМИН: ЗАЯВКИ НА ВЫВОД -------------------
+@dp.callback_query(F.data == "admin_withdraws")
+async def admin_withdraws(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    reqs = await get_pending_withdraws()
+    if not reqs:
+        await callback.message.edit_text("Нет заявок", reply_markup=back_button("admin_panel"))
+        return
+    text = "💰 Заявки на вывод:\n\n"
+    for r in reqs:
+        text += f"#{r[0]} | Пользователь: {r[1]} | {r[2]}$ | {r[3]}\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Принять", callback_data="withdraw_approve"), InlineKeyboardButton(text="❌ Отклонить", callback_data="withdraw_reject")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_panel")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "withdraw_approve")
+async def withdraw_approve(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    reqs = await get_pending_withdraws()
+    if not reqs:
+        await callback.answer("Нет заявок", show_alert=True)
+        return
+    req_id, user_id, amount, wallet = reqs[0]
+    await update_withdraw_status(req_id, "approved")
+    await bot.send_message(user_id, f"✅ Ваша заявка на вывод {amount}$ одобрена.")
+    await callback.answer("Одобрено", show_alert=True)
+    await admin_withdraws(callback)
+
+@dp.callback_query(F.data == "withdraw_reject")
+async def withdraw_reject(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    reqs = await get_pending_withdraws()
+    if not reqs:
+        await callback.answer("Нет заявок", show_alert=True)
+        return
+    req_id, user_id, amount, wallet = reqs[0]
+    await update_withdraw_status(req_id, "rejected")
+    await update_balance(user_id, amount)
+    await bot.send_message(user_id, f"❌ Заявка на вывод {amount}$ отклонена. Средства возвращены.")
+    await callback.answer("Отклонено", show_alert=True)
+    await admin_withdraws(callback)
+
+# ------------------- АДМИН: ПРОМОКОДЫ -------------------
+@dp.callback_query(F.data == "admin_promocodes")
+async def admin_promocodes_menu(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Выдать баланс", callback_data="admin_add_balance"),
-         InlineKeyboardButton(text="➖ Списать баланс", callback_data="admin_remove_balance")],
+        [InlineKeyboardButton(text="➕ Создать", callback_data="admin_create_promo")],
+        [InlineKeyboardButton(text="📋 Список", callback_data="admin_list_promos")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_panel")]
     ])
-    await callback.message.edit_text("Управление балансами пользователей", reply_markup=kb)
+    await callback.message.edit_text("🎫 Промокоды", reply_markup=kb)
     await callback.answer()
 
-# ------------------- РАСШИРЕННАЯ СТАТИСТИКА -------------------
-async def get_registration_stats():
-    now = int(time.time())
-    day_ago = now - 86400
-    week_ago = now - 7*86400
-    month_ago = now - 30*86400
-    async with db_pool.acquire() as conn:
-        day = await conn.fetchval("SELECT COUNT(*) FROM users WHERE registered_at >= $1", day_ago)
-        week = await conn.fetchval("SELECT COUNT(*) FROM users WHERE registered_at >= $1", week_ago)
-        month = await conn.fetchval("SELECT COUNT(*) FROM users WHERE registered_at >= $1", month_ago)
-        return day, week, month
+@dp.callback_query(F.data == "admin_create_promo")
+async def create_promo_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await callback.message.answer("Введите код промокода:")
+    await state.set_state(AdminCreatePromocode.waiting_code)
+    await callback.answer()
 
-async def get_balance_stats():
-    async with db_pool.acquire() as conn:
-        total_balance = await conn.fetchval("SELECT COALESCE(SUM(balance),0) FROM users")
-        avg_balance = await conn.fetchval("SELECT COALESCE(AVG(balance),0) FROM users")
-        positive_count = await conn.fetchval("SELECT COUNT(*) FROM users WHERE balance > 0")
-        return total_balance, avg_balance, positive_count
+@dp.message(AdminCreatePromocode.waiting_code)
+async def create_promo_code(message: types.Message, state: FSMContext):
+    code = message.text.strip().upper()
+    await state.update_data(code=code)
+    await message.answer("Введите количество дней:")
+    await state.set_state(AdminCreatePromocode.waiting_days)
 
-async def get_withdraw_stats():
-    async with db_pool.acquire() as conn:
-        approved = await conn.fetchval("SELECT COALESCE(SUM(amount),0) FROM withdraw_requests WHERE status='approved'")
-        pending = await conn.fetchval("SELECT COALESCE(SUM(amount),0) FROM withdraw_requests WHERE status='pending'")
-        return approved, pending
+@dp.message(AdminCreatePromocode.waiting_days)
+async def create_promo_days(message: types.Message, state: FSMContext):
+    try:
+        days = int(message.text.strip())
+        if days <= 0:
+            raise ValueError
+        await state.update_data(days=days)
+        await message.answer("Макс. использований:")
+        await state.set_state(AdminCreatePromocode.waiting_max_uses)
+    except:
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите число >0", parse_mode="HTML")
 
-async def get_promocode_stats():
-    async with db_pool.acquire() as conn:
-        total_used = await conn.fetchval("SELECT COUNT(*) FROM used_promocodes")
-        avg_days = await conn.fetchval("SELECT AVG(p.days) FROM used_promocodes u JOIN promocodes p ON u.code_id = p.id")
-        return total_used, avg_days or 0
+@dp.message(AdminCreatePromocode.waiting_max_uses)
+async def create_promo_max_uses(message: types.Message, state: FSMContext):
+    try:
+        max_uses = int(message.text.strip())
+        if max_uses < 1:
+            raise ValueError
+        data = await state.get_data()
+        await create_promocode(data["code"], data["days"], max_uses)
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Промокод {data['code']} создан!", parse_mode="HTML")
+        await state.clear()
+    except:
+        await message.answer(f"<tg-emoji emoji-id='{EMOJI['error']}'></tg-emoji> Введите число от 1", parse_mode="HTML")
 
-async def get_top_users_by_balance(limit=10):
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tg_id, username, balance FROM users ORDER BY balance DESC LIMIT $1", limit)
-        return rows
+@dp.callback_query(F.data == "admin_list_promos")
+async def list_promocodes_admin(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    promos = await get_all_promocodes()
+    if not promos:
+        await callback.message.edit_text("Нет промокодов.", reply_markup=back_button("admin_promocodes"))
+        return
+    text = "Список промокодов:\n"
+    for p in promos:
+        text += f"🔹 {p['code']} – {p['days']} дней, {p['uses']}/{p['max_uses']}\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить", callback_data="admin_delete_promo")], [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_promocodes")]])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
 
-async def get_top_subscriptions(limit=10):
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tg_id, username, sub_until FROM users WHERE sub_until > $1 ORDER BY sub_until DESC LIMIT $2", int(time.time()), limit)
-        return rows
+@dp.callback_query(F.data == "admin_delete_promo")
+async def delete_promo_start(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    promos = await get_all_promocodes()
+    if not promos:
+        await callback.answer("Нет промокодов", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"❌ {p['code']}", callback_data=f"del_promo_{p['id']}")] for p in promos] + [[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_promocodes")]])
+    await callback.message.edit_text("Выберите промокод для удаления:", reply_markup=kb)
+    await callback.answer()
 
-async def get_all_users_for_csv():
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT tg_id, username, to_timestamp(registered_at) as registered, balance, to_timestamp(sub_until) as sub_until FROM users ORDER BY tg_id")
-        return rows
+@dp.callback_query(F.data.startswith("del_promo_"))
+async def delete_promo_exec(callback: types.CallbackQuery):
+    promo_id = int(callback.data.split("_")[2])
+    await delete_promocode(promo_id)
+    await callback.answer("Удалён", show_alert=True)
+    await admin_promocodes_menu(callback)
 
+# ------------------- АДМИН: РАСШИРЕННАЯ СТАТИСТИКА -------------------
+# Функции get_*stats уже определены в части 1
 @dp.callback_query(F.data == "admin_ext_stats")
 async def admin_extended_stats(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -1447,6 +1548,7 @@ async def admin_top_subscription(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=back_button("admin_ext_stats"), parse_mode="HTML")
     await callback.answer()
 
+# ------------------- АДМИН: ЭКСПОРТ CSV -------------------
 @dp.callback_query(F.data == "admin_export_csv")
 async def admin_export_csv(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -1465,6 +1567,68 @@ async def admin_export_csv(callback: types.CallbackQuery):
     await callback.message.answer_document(BufferedInputFile(csv_content, filename="users_export.csv"), caption=f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Экспорт пользователей", parse_mode="HTML")
     await callback.answer()
 
+# ------------------- АДМИН: ПОЛЬЗОВАТЕЛИ (ПАГИНАЦИЯ) -------------------
+@dp.callback_query(F.data == "admin_users")
+async def admin_users_list(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    users = await get_all_users()
+    if not users:
+        await callback.message.edit_text("Нет пользователей", reply_markup=back_button("admin_panel"))
+        return
+    await state.update_data(page=0)
+    await show_users_page(callback.message, state)
+
+async def show_users_page(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    page = data.get("page", 0)
+    users = await get_all_users()
+    per_page = 10
+    total = max(1, (len(users) + per_page - 1) // per_page)
+    if page >= total:
+        page = total - 1
+    if page < 0:
+        page = 0
+    await state.update_data(page=page)
+    start = page * per_page
+    end = start + per_page
+    current = users[start:end]
+    text = "👥 Пользователи:\n\n"
+    for u in current:
+        sub = datetime.fromtimestamp(u["sub_until"]).strftime('%d.%m.%Y') if u["sub_until"] else "Нет"
+        text += f"🆔 {u['tg_id']} | {u['username']}\n💵 {u['balance']:.2f}$ | Подписка до: {sub}\n\n"
+    kb = []
+    if page > 0:
+        kb.append(InlineKeyboardButton(text="◀️ Назад", callback_data="users_page_prev"))
+    if page < total - 1:
+        kb.append(InlineKeyboardButton(text="Вперед ▶️", callback_data="users_page_next"))
+    kb.append(InlineKeyboardButton(text="🔙 В админку", callback_data="admin_panel"))
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[kb])
+    await message.edit_text(text, reply_markup=keyboard)
+
+@dp.callback_query(F.data == "users_page_prev")
+async def users_page_prev(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    page = (await state.get_data()).get("page", 0)
+    if page > 0:
+        await state.update_data(page=page - 1)
+        await show_users_page(callback.message, state)
+    await callback.answer()
+
+@dp.callback_query(F.data == "users_page_next")
+async def users_page_next(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    page = (await state.get_data()).get("page", 0)
+    users = await get_all_users()
+    total = max(1, (len(users) + 9) // 10)
+    if page < total - 1:
+        await state.update_data(page=page + 1)
+        await show_users_page(callback.message, state)
+    await callback.answer()
+
+# ------------------- АДМИН: СТАТИСТИКА РАССЫЛОК -------------------
 @dp.callback_query(F.data == "admin_broadcast_stats")
 async def admin_broadcast_stats(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -1488,10 +1652,10 @@ async def admin_broadcast_stats(callback: types.CallbackQuery):
             text += f"\n<tg-emoji emoji-id='{EMOJI['crypto']}'></tg-emoji> <b>Топ пользователей по проливу:</b>\n"
             for u in top_users:
                 text += f"• ID {u['user_id']} — {u['total']} контактов\n"
-    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"))
+    await callback.message.edit_text(text, reply_markup=back_button("admin_panel"), parse_mode="HTML")
     await callback.answer()
 
-# ------------------- ГЛОБАЛЬНАЯ РАССЫЛКА (админ) -------------------
+# ------------------- ГЛОБАЛЬНАЯ РАССЫЛКА (АДМИН) -------------------
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
@@ -1533,15 +1697,32 @@ async def admin_broadcast_confirm(message: types.Message, state: FSMContext):
     await send_discord_log("📢 Глобальная рассылка", f"Отправлено {sent} из {total}", 0x9b59b6)
     await state.clear()
 
-# ------------------- ПОДДЕРЖКА (ТИКЕТЫ) с логами в Discord -------------------
-# (хендлеры поддержки уже были в части 2, но добавим логи)
-# Если у вас ещё нет хендлеров поддержки, добавьте их сейчас.
-# Я добавлю только логи в существующие хендлеры (предполагается, что они уже есть).
+# ------------------- ПОМОЩЬ (HELP) -------------------
+@dp.callback_query(F.data == "help")
+async def help_menu(callback: types.CallbackQuery):
+    text = (
+        f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>ПОМОЩЬ И ИНСТРУКЦИЯ</b>\n\n"
+        "┌─────────────────────────────────┐\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['crypto']}'></tg-emoji> <b>БАЛАНС</b>                       │\n"
+        "│  Пополнение через CryptoBot      │\n"
+        "│  (USDT). Вывод от 1$ на кошелёк. │\n"
+        "├─────────────────────────────────┤\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> <b>РАССЫЛКИ</b>                    │\n"
+        "│  Добавь свои Telegram/VK аккаунты,│\n"
+        "│  пиши сообщения, настраивай задержку.│\n"
+        "├─────────────────────────────────┤\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['welcome']}'></tg-emoji> <b>ПОДПИСКА</b>                    │\n"
+        "│  Даёт доступ к рассылкам.        │\n"
+        "├─────────────────────────────────┤\n"
+        f"│  <tg-emoji emoji-id='{EMOJI['token_input']}'></tg-emoji> <b>ТЕХПОДДЕРЖКА</b>                │\n"
+        "│  @bloodworn                      │\n"
+        "└─────────────────────────────────┘\n\n"
+        "✨ <b>Удачи в использовании!</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=back_button("main_menu"), parse_mode="HTML")
+    await callback.answer()
 
-# Если хендлер support_send_question уже существует, добавьте в него:
-# await send_discord_log(...) после создания тикета.
-
-# Если его нет, вот полный рабочий блок поддержки (вставьте вместо вашего старого):
+# ------------------- ПОДДЕРЖКА (ТИКЕТЫ) – полные хендлеры -------------------
 @dp.callback_query(F.data == "support")
 async def support_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>Напишите ваш вопрос.</b>\nАдминистратор ответит в этом чате.", parse_mode="HTML")
@@ -1556,14 +1737,9 @@ async def support_send_question(message: types.Message, state: FSMContext):
     await bot.send_message(ADMIN_ID, f"🆕 **Новый тикет #{ticket_id}**\nОт: {message.from_user.id}\n\n{message.text}", reply_markup=kb)
     await message.answer(f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Ваше сообщение отправлено администратору (Тикет #{ticket_id}).\nОжидайте ответа.", parse_mode="HTML")
     await state.clear()
-    # Discord лог
     await send_discord_log(
         title="🆕 Новый тикет",
-        description=(
-            f"**Тикет #{ticket_id}**\n"
-            f"Пользователь: `{message.from_user.id}`\n"
-            f"Вопрос:\n{message.text[:300]}"
-        ),
+        description=f"**Тикет #{ticket_id}**\nПользователь: `{message.from_user.id}`\nВопрос: {message.text[:300]}",
         color=0x00aaFF
     )
 
@@ -1591,14 +1767,9 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE support_tickets SET status='closed', closed_at=$1 WHERE id=$2", int(time.time()), ticket_id)
     await state.clear()
-    # Discord лог ответа и закрытия
     await send_discord_log(
         title="💬 Ответ администратора",
-        description=(
-            f"**Тикет #{ticket_id}**\n"
-            f"Пользователь: `{user_id}`\n"
-            f"Ответ:\n{message.text[:300]}"
-        ),
+        description=f"**Тикет #{ticket_id}**\nПользователь: `{user_id}`\nОтвет: {message.text[:300]}",
         color=0x9b59b6
     )
     await send_discord_log(
@@ -1625,18 +1796,20 @@ async def vk_tutorial(callback: types.CallbackQuery):
     await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
     await callback.answer()
 
-# ------------------- ФОНОВАЯ ЗАДАЧА ДЛЯ РАССЫЛКИ ИЗ ВЕБ-ПАНЕЛИ -------------------
-async def process_admin_broadcasts():
-    while True:
-        await asyncio.sleep(30)
-        async with db_pool.acquire() as conn:
-            tasks = await conn.fetch("SELECT id, message FROM admin_broadcast_tasks WHERE status='pending' LIMIT 10")
-            for task in tasks:
-                users = await get_all_users()
-                for u in users:
-                    try:
-                        await bot.send_message(u["tg_id"], task["message"])
-                    except:
-                        pass
-                await conn.execute("UPDATE admin_broadcast_tasks SET status='done' WHERE id=$1", task["id"])
+# ------------------- ТЕСТОВАЯ КОМАНДА ДЛЯ ПРЕМИУМ-ЭМОДЗИ -------------------
+@dp.message(Command("test_emoji"))
+async def test_emoji(message: types.Message):
+    text = (
+        f'<tg-emoji emoji-id="{EMOJI["welcome"]}"></tg-emoji> <b>Приветствие</b>\n'
+        f'<tg-emoji emoji-id="{EMOJI["success"]}"></tg-emoji> <b>Успех</b>\n'
+        f'<tg-emoji emoji-id="{EMOJI["error"]}"></tg-emoji> <b>Ошибка</b>'
+    )
+    await message.answer(text, parse_mode="HTML")
 
+# ------------------- ЗАПУСК БОТА -------------------
+async def main():
+    await init_db()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
