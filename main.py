@@ -875,6 +875,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         total = len(targets)
         if total == 0:
             await status_msg.edit_text("❌ Нет получателей.")
+            await state.clear()
             return
 
         sent = 0
@@ -902,10 +903,11 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
                 f"📊 Прогресс: {percent:.1f}%\n"
                 f"{bar}\n"
                 f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-                f"⏲️ Осталось ~ {remaining_sec:.0f} сек",
-                parse_mode="Markdown"
+                f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
             )
             await status_msg.edit_text(text_status, parse_mode="Markdown")
+
+        await update_progress()
 
         for target in targets:
             try:
