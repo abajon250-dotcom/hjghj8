@@ -164,6 +164,9 @@ async def init_db():
                 closed_at BIGINT DEFAULT 0
             )
         ''')
+        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS added_at BIGINT DEFAULT 0')
+        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS vk_id BIGINT DEFAULT 0')
+        await conn.execute('ALTER TABLE vk_accounts ADD COLUMN IF NOT EXISTS vk_screen_name TEXT DEFAULT \'\'')
         await conn.execute('ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS closed_at BIGINT DEFAULT 0')
     print("✅ PostgreSQL ready")
 
