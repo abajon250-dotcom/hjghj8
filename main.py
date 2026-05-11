@@ -1756,7 +1756,20 @@ async def vk_tutorial(callback: types.CallbackQuery):
     await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
     await callback.answer()
 
+@dp.message(Command("test_emoji"))
+async def test_emoji(message: types.Message):
+    # Ваш ID для приветствия
+    await message.answer(
+        '<tg-emoji emoji-id="5278611606756942667"></tg-emoji> Это ваше приветствие',
+        parse_mode="HTML"
+    )
+    # Ваш ID для информации
+    await message.answer(
+        '<tg-emoji emoji-id="5278753302023004775"></tg-emoji> Это информация',
+        parse_mode="HTML"
+    )
 
+    
 # ------------------- ЗАПУСК -------------------
 async def main():
     await init_db()
