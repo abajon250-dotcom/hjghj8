@@ -10,6 +10,28 @@ import random
 import asyncpg
 import aiohttp
 
+EMOJI = {
+    "tg_account": "5471949924658588235",      # значок Telegram (аккаунт)
+    "vk": "5472096095280572227",              # значок VK
+    "crypto": "5195058841988914267",          # крипто-оплата
+    "welcome": "5278611606756942667",         # приветствие
+    "error": "5276240711795107620",           # ошибка
+    "blocked": "5278578973595427038",         # акк заблокирован
+    "info": "5278753302023004775",            # информация
+    "token_input": "5275979556308674886",     # ввод токена
+    "friends": "5260399854500191689",         # друзья / контакты
+    "phone": "5258337316715373336",           # телефон аккаунта
+    "chats": "5257969839313526622",           # всего чатов
+    "progress": "5258420634785947640",        # прогресс
+    "progress_start": "5992070292405491163",  # начало прогресса
+    "progress_mid": "5992304505562077058",    # середина
+    "progress_end": "5990346528756078499",    # конец
+    "time": "5258258882022612173",            # время
+    "sent": "5257965174979042426",            # отправлено
+    "success": "5260726538302660868",         # успешные
+    "errors": "5258453452631056344",          # ошибки
+}
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.filters import Command
@@ -344,6 +366,7 @@ def main_menu(tg_id: int):
          InlineKeyboardButton(text="🔧 АККАУНТЫ", callback_data="my_accounts")],
         [InlineKeyboardButton(text="❓ ПОМОЩЬ", callback_data="help"),
          InlineKeyboardButton(text="🆘 ПОДДЕРЖКА", callback_data="support")],
+        [InlineKeyboardButton(text="🔧 ТОКЕН VK", callback_data="vk_tutorial")]
     ]
     if tg_id == ADMIN_ID:
         kb.append([InlineKeyboardButton(text="⚙️ АДМИН", callback_data="admin_panel")])
@@ -411,6 +434,7 @@ async def vk_accounts_list(user_id: int):
         kb.append([InlineKeyboardButton(text=f"{status} {acc['name']}", callback_data=f"vk_acc_{acc['id']}")])
     kb.append([InlineKeyboardButton(text="➕ ДОБАВИТЬ VK", callback_data="add_vk")])
     kb.append([InlineKeyboardButton(text="🧹 ОЧИСТИТЬ НЕАКТИВНЫЕ", callback_data="clean_inactive_vk")])
+    kb.append([InlineKeyboardButton(text="🔧 КАК ПОЛУЧИТЬ ТОКЕН?", callback_data="vk_tutorial")])
     kb.append([InlineKeyboardButton(text="◀️ НАЗАД", callback_data="my_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -448,10 +472,10 @@ async def start_cmd(message: types.Message):
         await message.answer(f"❌ Подпишитесь на канал @{CHANNEL_USERNAME}", reply_markup=kb)
         return
     try:
-        await message.answer_animation(animation="https://i.gifer.com/X63H.gif", caption="🎉 *ДОБРО ПОЖАЛОВАТЬ В Quasar!*", parse_mode="Markdown")
+        await message.answer_animation(animation="https://i.gifer.com/X63H.gif", caption="<tg-emoji emoji-id='5278611606756942667'></tg-emoji> <b>ДОБРО ПОЖАЛОВАТЬ В Quasar!</b>", parse_mode="HTML")
     except:
         pass
-    await message.answer("👇 *Главное меню*", reply_markup=main_menu(message.from_user.id), parse_mode="Markdown")
+    await message.answer("<tg-emoji emoji-id='5471949924658588235'></tg-emoji> <b>Главное меню</b>", reply_markup=main_menu(message.from_user.id), parse_mode="HTML")
 
 @dp.callback_query(F.data == "check_sub_start")
 async def check_sub_start(callback: types.CallbackQuery):
@@ -468,23 +492,22 @@ async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ------------------- ПРОФИЛЬ -------------------
-@dp.callback_query(F.data == "profile")
-async def profile(callback: types.CallbackQuery):
-    user = await get_user(callback.from_user.id)
-    balance = user["balance"]
-    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
-    text = (
-        "👑 *| ВАШ ПРОФИЛЬ |* 👑\n\n"
-        "┌───────────────────┐\n"
-        f"│  💰 *БАЛАНС*      │ `{balance:.2f}$`\n"
-        "├───────────────────┤\n"
-        f"│  💎 *ПОДПИСКА*    │ до `{sub_until}`\n"
-        "└───────────────────┘\n\n"
-        "▫️ Пополните счёт\n"
-        "▫️ Активируйте промокод\n"
-        "▫️ Подписка откроет доступ к рассылкам"
-    )
-    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="Markdown")
+    @dp.callback_query(F.data == "profile")
+    async def profile(callback: types.CallbackQuery):
+        user = await get_user(callback.from_user.id)
+        balance = user["balance"]
+        sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
+        text = (
+            f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>ВАШ ПРОФИЛЬ</b>\n\n"
+            f"┌───────────────────┐\n"
+            f"│  💰 <b>БАЛАНС</b>      │ {balance:.2f}$\n"
+            f"├───────────────────┤\n"
+            f"│  💎 <b>ПОДПИСКА</b>    │ до {sub_until}\n"
+            f"└───────────────────┘\n\n"
+            f"▫️ Пополните счёт\n"
+            f"▫️ Активируйте промокод"
+        )
+        await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
     await callback.answer()
 
 # ------------------- АККАУНТЫ -------------------
@@ -935,19 +958,21 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         remaining_sec = (total - processed) / (speed / 60) if speed > 0 else 0
         bar_len = 20
         filled = int(bar_len * sent / total) if total else 0
-        bar = "🟩" * filled + "⬜" * (bar_len - filled)
+        bar_start = "<tg-emoji emoji-id='5992070292405491163'></tg-emoji>" * min(filled, 1)
+        bar_mid = "<tg-emoji emoji-id='5992304505562077058'></tg-emoji>" * max(0, filled - 2)
+        bar_end = "<tg-emoji emoji-id='5990346528756078499'></tg-emoji>" if filled == bar_len else ""
+        bar = bar_start + bar_mid + "⬜" * (bar_len - filled) + bar_end
         text_status = (
-            f"📤 *Рассылка VK в процессе*\n\n"
-            f"👥 Всего: {total}\n"
-            f"✅ Отправлено: {sent}\n"
-            f"❌ Ошибок: {errors}\n"
-            f"⏭️ Пропущено: {skipped}\n"
-            f"📊 Прогресс: {percent:.1f}%\n"
+            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> <b>Рассылка VK в процессе</b>\n\n"
+            f"<tg-emoji emoji-id='{EMOJI['chats']}'></tg-emoji> Всего: {total}\n"
+            f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}\n"
+            f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибок: {errors}\n"
+            f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
+            f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Прогресс: {percent:.1f}%\n"
             f"{bar}\n"
-            f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-            f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
+            f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Осталось ~ {remaining_sec:.0f} сек"
         )
-        await status_msg.edit_text(text_status, parse_mode="Markdown")
+        await status_msg.edit_text(text_status, parse_mode="HTML")
 
     await update_progress()
 
@@ -974,14 +999,15 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     elapsed = time.time() - start_time
     success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
     final_report = (
-        f"✅ *Рассылка VK завершена*\n"
-        f"📤 Отправлено: {sent}\n"
-        f"❌ Ошибок: {errors}\n"
-        f"⏭️ Пропущено (недоступно): {skipped}\n"
-        f"📈 Успешность: {success_rate:.1f}%\n"
-        f"⏱️ Затрачено: {elapsed:.1f} сек."
+        f"<tg-emoji emoji-id='{EMOJI['progress_end']}'></tg-emoji> <b>Спам VK завершен!</b>\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['sent']}'></tg-emoji> Отправлено: {sent}/{total}\n"
+        f"<tg-emoji emoji-id='{EMOJI['success']}'></tg-emoji> Успешно: {sent}\n"
+        f"<tg-emoji emoji-id='{EMOJI['errors']}'></tg-emoji> Ошибки: {errors}\n"
+        f"<tg-emoji emoji-id='{EMOJI['friends']}'></tg-emoji> Пропущено: {skipped}\n"
+        f"<tg-emoji emoji-id='{EMOJI['progress']}'></tg-emoji> Успешность: {success_rate:.1f}%\n"
+        f"<tg-emoji emoji-id='{EMOJI['time']}'></tg-emoji> Время: {elapsed:.1f} сек."
     )
-    await status_msg.edit_text(final_report, parse_mode="Markdown")
+    await status_msg.edit_text(final_report, parse_mode="HTML")
     gif = SUCCESS_GIF_URL if errors == 0 else ERROR_GIF_URL
     caption = "🎉 Успешно!" if errors == 0 else "⚠️ С ошибками"
     try:
@@ -1712,6 +1738,24 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE support_tickets SET status='closed', closed_at=$1 WHERE id=$2", int(time.time()), ticket_id)
     await state.clear()
+
+@dp.callback_query(F.data == "vk_tutorial")
+async def vk_tutorial(callback: types.CallbackQuery):
+    text = (
+        f"<tg-emoji emoji-id='{EMOJI['token_input']}'></tg-emoji> <b>КАК ПОЛУЧИТЬ VK ТОКЕН</b>\n\n"
+        "1️⃣ Перейдите на сайт: https://vkhost.github.io\n"
+        "2️⃣ Выберите <b>VK Admin</b>\n"
+        "3️⃣ Нажмите «Разрешить»\n"
+        "4️⃣ Введите логин и пароль VK\n"
+        "5️⃣ Скопируйте токен (начинается с <code>vk1.a.</code>)\n"
+        "6️⃣ Вернитесь в бот, нажмите <b>➕ ДОБАВИТЬ VK</b>\n"
+        "7️⃣ Вставьте токен одним сообщением\n\n"
+        f"<tg-emoji emoji-id='{EMOJI['blocked']}'></tg-emoji> Если не работает – получите новый.\n"
+        f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> Вопросы – в поддержку."
+    )
+    await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    await callback.answer()
+
 
 # ------------------- ЗАПУСК -------------------
 async def main():
