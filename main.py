@@ -492,22 +492,22 @@ async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ------------------- ПРОФИЛЬ -------------------
-    @dp.callback_query(F.data == "profile")
-    async def profile(callback: types.CallbackQuery):
-        user = await get_user(callback.from_user.id)
-        balance = user["balance"]
-        sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
-        text = (
-            f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>ВАШ ПРОФИЛЬ</b>\n\n"
-            f"┌───────────────────┐\n"
-            f"│  💰 <b>БАЛАНС</b>      │ {balance:.2f}$\n"
-            f"├───────────────────┤\n"
-            f"│  💎 <b>ПОДПИСКА</b>    │ до {sub_until}\n"
-            f"└───────────────────┘\n\n"
-            f"▫️ Пополните счёт\n"
-            f"▫️ Активируйте промокод"
-        )
-        await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
+@dp.callback_query(F.data == "profile")
+async def profile(callback: types.CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    balance = user["balance"]
+    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
+    text = (
+        '<tg-emoji emoji-id="5278753302023004775"></tg-emoji> <b>ВАШ ПРОФИЛЬ</b>\n\n'
+        '┌───────────────────┐\n'
+        f'│  💰 <b>БАЛАНС</b>      │ {balance:.2f}$\n'
+        '├───────────────────┤\n'
+        f'│  💎 <b>ПОДПИСКА</b>    │ до {sub_until}\n'
+        '└───────────────────┘\n\n'
+        '▫️ Пополните счёт\n'
+        '▫️ Активируйте промокод'
+    )
+    await callback.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
     await callback.answer()
 
 # ------------------- АККАУНТЫ -------------------
