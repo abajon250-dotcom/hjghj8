@@ -925,55 +925,41 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    # Клавиатура выбора типа сообщения
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Текст", callback_data="vk_type_text")],
         [InlineKeyboardButton(text="🖼️ Фото", callback_data="vk_type_photo")],
         [InlineKeyboardButton(text="🎥 Видео", callback_data="vk_type_video")],
-        [InlineKeyboardButton(text="📄 Документ", callback_data="vk_type_doc")],
+        [InlineKeyboardButton(text="📄 Документ (APK, PDF и др.)", callback_data="vk_type_doc")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]
     ])
     await callback.message.answer("Выберите тип сообщения для рассылки VK:", reply_markup=kb)
     await state.set_state(BroadcastVK.waiting_type)
     await callback.answer()
 
-# Обработчики выбора типа
-@dp.callback_query(F.data == "vk_type_text", BroadcastVK.waiting_type)
-async def vk_type_text(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(vk_msg_type="text")
-    await callback.message.answer("Введите текст сообщения:")
-    await state.set_state(BroadcastVK.waiting_text)
+@dp.callback_query(F.data.startswith("vk_type_"), BroadcastVK.waiting_type)
+async def vk_type_choice(callback: types.CallbackQuery, state: FSMContext):
+    msg_type = callback.data.split("_")[2]  # text, photo, video, doc
+    await state.update_data(vk_msg_type=msg_type)
+    if msg_type == "text":
+        await callback.message.answer("📝 Введите текст сообщения:")
+        await state.set_state(BroadcastVK.waiting_text)
+    else:
+        await callback.message.answer(f"📎 Пришлите файл для рассылки (можно с подписью):")
+        await state.set_state(BroadcastVK.waiting_media)
     await callback.answer()
 
-@dp.callback_query(F.data == "vk_type_photo", BroadcastVK.waiting_type)
-async def vk_type_photo(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(vk_msg_type="photo")
-    await callback.message.answer("Пришлите фото для рассылки (можно с подписью):")
-    await state.set_state(BroadcastVK.waiting_media)
-    await callback.answer()
+@dp.message(BroadcastVK.waiting_text)
+async def vk_text_received(message: types.Message, state: FSMContext):
+    await state.update_data(vk_text=message.text)
+    await message.answer("⏱️ Введите задержку (сек):")
+    await state.set_state(BroadcastVK.waiting_delay)
 
-@dp.callback_query(F.data == "vk_type_video", BroadcastVK.waiting_type)
-async def vk_type_video(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(vk_msg_type="video")
-    await callback.message.answer("Пришлите видео для рассылки (можно с подписью):")
-    await state.set_state(BroadcastVK.waiting_media)
-    await callback.answer()
-
-@dp.callback_query(F.data == "vk_type_doc", BroadcastVK.waiting_type)
-async def vk_type_doc(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(vk_msg_type="doc")
-    await callback.message.answer("Пришлите документ (файл) для рассылки (можно с подписью):")
-    await state.set_state(BroadcastVK.waiting_media)
-    await callback.answer()
-
-# Обработка загрузки медиа (фото, видео, документ)
 @dp.message(BroadcastVK.waiting_media, F.photo | F.video | F.document)
 async def vk_media_received(message: types.Message, state: FSMContext):
     data = await state.get_data()
     msg_type = data.get("vk_msg_type")
     caption = message.caption
 
-    # Определяем тип файла и получаем file_id
     if msg_type == "photo" and message.photo:
         file_id = message.photo[-1].file_id
         file_name = f"vk_photo_{int(time.time())}.jpg"
@@ -987,24 +973,15 @@ async def vk_media_received(message: types.Message, state: FSMContext):
         await message.answer("❌ Неверный тип файла. Попробуйте ещё раз.")
         return
 
-    # Сохраняем данные для последующей загрузки на сервер VK
     await state.update_data(media_file_id=file_id, media_caption=caption, media_file_name=file_name)
-    await message.answer("Введите задержку (сек):")
+    await message.answer("⏱️ Введите задержку (сек):")
     await state.set_state(BroadcastVK.waiting_delay)
 
-# Обработка текстового сообщения (если выбран тип "текст")
-@dp.message(BroadcastVK.waiting_text)
-async def broadcast_vk_text(message: types.Message, state: FSMContext):
-    await state.update_data(vk_text=message.text)
-    await message.answer("Введите задержку (сек):")
-    await state.set_state(BroadcastVK.waiting_delay)
-
-# Основная функция VK рассылки (с поддержкой медиа)
 @dp.message(BroadcastVK.waiting_delay)
-async def broadcast_vk_delay(message: types.Message, state: FSMContext):
+async def vk_delay_received(message: types.Message, state: FSMContext):
     raw = message.text.strip()
     if not raw:
-        await message.answer("❌ Введите задержку в секундах (число).")
+        await message.answer("❌ Введите число.")
         return
     try:
         delay = float(raw.replace(',', '.'))
@@ -1015,63 +992,59 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Нужно число, например 2")
         return
+    await state.update_data(delay=delay)
 
-    data = await state.get_data()
-    text = data["text"]
-    acc_id = data["acc_id"]
-
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
-        if not row:
-            await message.answer("❌ Аккаунт не найден")
-            await state.clear()
-            return
-        token, vk_name, is_active = row["token"], row["vk_name"], row["is_active"]
-
-    if not is_active:
-        await message.answer(f"❌ Аккаунт {vk_name} неактивен.")
-        await state.clear()
-        return
-
-    # --- Предложение выбора режима рассылки ---
+    # Предлагаем выбрать режим рассылки
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Только друзья", callback_data="vk_mode_friends")],
+        [InlineKeyboardButton(text="💬 Только беседы", callback_data="vk_mode_chats")],
         [InlineKeyboardButton(text="👥+💬 Сначала друзья, потом беседы", callback_data="vk_mode_all")]
     ])
-    await state.update_data(delay=delay, text=text, token=token, vk_name=vk_name, acc_id=acc_id)
     await message.answer("📌 Выберите режим рассылки:", reply_markup=kb)
-    await state.set_state(BroadcastVK.waiting_mode)  # новое состояние, нужно добавить
-    # Состояние нужно добавить в класс BroadcastVK: waiting_mode = State()
+    await state.set_state(BroadcastVK.waiting_mode)
 
 @dp.callback_query(F.data.startswith("vk_mode_"), BroadcastVK.waiting_mode)
 async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
     mode = callback.data.split("_")[2]  # friends, chats, all
     data = await state.get_data()
-    delay = data["delay"]
-    text = data["text"]
-    token = data["token"]
-    vk_name = data["vk_name"]
     acc_id = data["acc_id"]
+    msg_type = data.get("vk_msg_type", "text")
+    text = data.get("vk_text") if msg_type == "text" else data.get("media_caption")
+    media_file_id = data.get("media_file_id")
+    media_file_name = data.get("media_file_name")
+    delay = data["delay"]
 
-    await callback.message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, callback.from_user.id)
+        if not row:
+            await callback.message.answer("❌ Аккаунт не найден")
+            await state.clear()
+            return
+        token, vk_name, is_active = row["token"], row["vk_name"], row["is_active"]
 
+    if not is_active:
+        await callback.message.answer(f"❌ Аккаунт {vk_name} неактивен.")
+        await state.clear()
+        return
+
+    status_msg = await callback.message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
     try:
         vk.users.get()
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
         await state.clear()
         return
 
-    # Сбор контактов в зависимости от режима
+    # Сбор контактов
     friends = []
     chats = []
     if mode in ("friends", "all"):
         try:
             friends = vk.friends.get()["items"]
         except Exception as e:
-            await callback.message.answer(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
+            await status_msg.edit_text(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
             await state.clear()
             return
     if mode in ("chats", "all"):
@@ -1079,30 +1052,63 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
             convs = vk.messages.getConversations(count=200)["items"]
             chats = [c["conversation"]["peer"]["id"] for c in convs]
         except Exception as e:
-            await callback.message.answer(f"❌ Ошибка получения бесед: {get_russian_error(e)}")
+            await status_msg.edit_text(f"❌ Ошибка получения бесед: {get_russian_error(e)}")
             await state.clear()
             return
 
-    # Формируем единый список получателей
     targets = []
     if mode == "friends":
         targets = friends
     elif mode == "chats":
         targets = chats
-    else:  # all – сначала друзья, потом беседы
+    else:
         targets = friends + chats
 
     total = len(targets)
     if total == 0:
-        await callback.message.answer("❌ Нет получателей для выбранного режима.")
+        await status_msg.edit_text("❌ Нет получателей для выбранного режима.")
         await state.clear()
         return
 
-    status_msg = await callback.message.answer(
+    # Если нужно отправить медиа – загружаем файл на сервер VK
+    uploaded_media = None
+    if msg_type != "text":
+        # Скачиваем файл из Telegram
+        file = await callback.bot.get_file(media_file_id)
+        file_path = f"/tmp/{media_file_name}"
+        await callback.bot.download_file(file.file_path, file_path)
+
+        try:
+            if msg_type == "photo":
+                upload_server = vk.photos.getMessagesUploadServer()
+                async with aiohttp.ClientSession() as session:
+                    with open(file_path, 'rb') as f:
+                        files = {'photo': f}
+                        response = await session.post(upload_server['upload_url'], files=files)
+                        data = await response.json()
+                        uploaded_media = vk.photos.saveMessagesPhoto(photo=data['photo'], server=data['server'], hash=data['hash'])[0]
+            else:
+                # Для видео и документов используем docs.getMessagesUploadServer
+                upload_server = vk.docs.getMessagesUploadServer(type='doc')
+                async with aiohttp.ClientSession() as session:
+                    with open(file_path, 'rb') as f:
+                        files = {'file': f}
+                        response = await session.post(upload_server['upload_url'], files=files)
+                        data = await response.json()
+                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {get_russian_error(e)}")
+            os.remove(file_path)
+            await state.clear()
+            return
+        os.remove(file_path)
+
+    await status_msg.edit_text(
         f"🚀 *Рассылка VK запущена*\n"
         f"👥 Друзей: {len(friends)}, бесед: {len(chats)}\n"
         f"📊 Всего: {total}\n"
-        f"⏱️ Задержка: {delay} сек\n\n"
+        f"⏱️ Задержка: {delay} сек\n"
+        f"📎 Тип: {msg_type}\n\n"
         f"✅ Отправлено: 0/{total} (0%)",
         parse_mode="Markdown"
     )
@@ -1139,12 +1145,17 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
 
     for target in targets:
         try:
-            if isinstance(target, int):
-                # Друг (пользователь)
-                vk.messages.send(user_id=target, message=text, random_id=0)
+            if msg_type == "text":
+                if isinstance(target, int):
+                    vk.messages.send(user_id=target, message=text, random_id=0)
+                else:
+                    vk.messages.send(peer_id=target, message=text, random_id=0)
             else:
-                # Беседа (peer_id)
-                vk.messages.send(peer_id=target, message=text, random_id=0)
+                attachment = f"doc{uploaded_media['owner_id']}_{uploaded_media['id']}"
+                if isinstance(target, int):
+                    vk.messages.send(user_id=target, message=text or "", random_id=0, attachment=attachment)
+                else:
+                    vk.messages.send(peer_id=target, message=text or "", random_id=0, attachment=attachment)
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
