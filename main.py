@@ -1070,10 +1070,9 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Если нужно отправить медиа – загружаем файл на сервер VK
+    # Загрузка медиа, если нужно
     uploaded_media = None
     if msg_type != "text":
-        # Скачиваем файл из Telegram
         file = await callback.bot.get_file(media_file_id)
         file_path = f"/tmp/{media_file_name}"
         await callback.bot.download_file(file.file_path, file_path)
@@ -1081,19 +1080,23 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         try:
             if msg_type == "photo":
                 upload_server = vk.photos.getMessagesUploadServer()
+                upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
                     with open(file_path, 'rb') as f:
-                        files = {'photo': f}
-                        response = await session.post(upload_server['upload_url'], files=files)
+                        form_data = aiohttp.FormData()
+                        form_data.add_field('photo', f, filename=media_file_name)
+                        response = await session.post(upload_url, data=form_data)
                         data = await response.json()
                         uploaded_media = vk.photos.saveMessagesPhoto(photo=data['photo'], server=data['server'], hash=data['hash'])[0]
             else:
-                # Для видео и документов используем docs.getMessagesUploadServer
+                # Документы (включая видео, APK, любые файлы)
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
+                upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
                     with open(file_path, 'rb') as f:
-                        files = {'file': f}
-                        response = await session.post(upload_server['upload_url'], files=files)
+                        form_data = aiohttp.FormData()
+                        form_data.add_field('file', f, filename=media_file_name)
+                        response = await session.post(upload_url, data=form_data)
                         data = await response.json()
                         uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
         except Exception as e:
