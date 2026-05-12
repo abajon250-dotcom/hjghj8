@@ -1037,7 +1037,7 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Сбор контактов (друзья и/или беседы)
+    # Сбор контактов
     friends = []
     chats = []
     if mode in ("friends", "all"):
@@ -1070,10 +1070,10 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Загрузка медиа (если не текст)
     # Загрузка медиа
     uploaded_media = None
     if msg_type != "text":
+        # Скачиваем файл
         file = await callback.bot.get_file(media_file_id)
         file_path = f"/tmp/{media_file_name}"
         await callback.bot.download_file(file.file_path, file_path)
@@ -1093,16 +1093,10 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                                 raise Exception(f"VK returned: {resp_data}")
                             uploaded_media = vk.photos.saveMessagesPhoto(photo=resp_data['photo'], server=resp_data['server'], hash=resp_data['hash'])[0]
             else:
-                # Документ (включая APK) – упаковываем .apk в ZIP
-                if media_file_name.lower().endswith('.apk'):
-                    import zipfile
-                    zip_path = file_path + '.zip'
-                    with zipfile.ZipFile(zip_path, 'w') as zf:
-                        zf.write(file_path, arcname=media_file_name)
-                    os.remove(file_path)
-                    file_path = zip_path
-                    media_file_name += '.zip'
-                    logging.info(f"APK упакован в ZIP: {media_file_name}")
+                # Документ – проверяем запрещённые расширения
+                lower_name = media_file_name.lower()
+                if lower_name.endswith('.apk') or lower_name.endswith('.exe') or lower_name.endswith('.msi'):
+                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов. Используйте Telegram рассылку.")
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
@@ -1173,7 +1167,13 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                     vk.messages.send(user_id=target, message=text, random_id=0)
                 else:
                     vk.messages.send(peer_id=target, message=text, random_id=0)
-            else:
+            elif msg_type == "photo":
+                attachment = f"photo{uploaded_media['owner_id']}_{uploaded_media['id']}"
+                if isinstance(target, int):
+                    vk.messages.send(user_id=target, message=text or "", random_id=0, attachment=attachment)
+                else:
+                    vk.messages.send(peer_id=target, message=text or "", random_id=0, attachment=attachment)
+            else:  # документ
                 attachment = f"doc{uploaded_media['owner_id']}_{uploaded_media['id']}"
                 if isinstance(target, int):
                     vk.messages.send(user_id=target, message=text or "", random_id=0, attachment=attachment)
