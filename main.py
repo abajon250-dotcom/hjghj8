@@ -447,8 +447,8 @@ async def vk_accounts_list(user_id: int):
 # ------------------- FSM -------------------
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
-class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State()
-class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State()
+class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_media = State()
+class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_media = State()
 class Deposit(StatesGroup): waiting_amount = State()
 class Withdraw(StatesGroup): waiting_amount = State(); waiting_wallet = State()
 class AdminGiveSubscription(StatesGroup): waiting_user_id = State(); waiting_days = State()
@@ -833,8 +833,17 @@ async def clean_inactive_vk(callback: types.CallbackQuery):
 async def tg_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите текст рассылки:", parse_mode="HTML")
-    await state.set_state(BroadcastTG.waiting_text)
+    # Клавиатура выбора типа сообщения
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Текст", callback_data="tg_type_text")],
+        [InlineKeyboardButton(text="🖼️ Фото", callback_data="tg_type_photo")],
+        [InlineKeyboardButton(text="🎥 Видео", callback_data="tg_type_video")],
+        [InlineKeyboardButton(text="🎙️ Голосовое", callback_data="tg_type_voice")],
+        [InlineKeyboardButton(text="📄 Документ", callback_data="tg_type_document")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]
+    ])
+    await callback.message.answer("Выберите тип сообщения для рассылки:", reply_markup=kb)
+    await state.set_state(BroadcastTG.waiting_type)
     await callback.answer()
 
 @dp.message(BroadcastTG.waiting_text)
@@ -908,20 +917,86 @@ async def broadcast_tg_delay(message: types.Message, state: FSMContext):
         await state.clear()
 
 # ------------------- РАССЫЛКИ VK (улучшенная, только друзья) -------------------
+# ------------------- РАССЫЛКИ VK (с поддержкой файлов) -------------------
 @dp.callback_query(F.data.startswith("vk_broadcast_"))
 async def vk_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[2])
     await state.update_data(acc_id=acc_id)
-    await callback.message.answer("Введите текст рассылки:", parse_mode="HTML")
+    # Клавиатура выбора типа сообщения
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Текст", callback_data="vk_type_text")],
+        [InlineKeyboardButton(text="🖼️ Фото", callback_data="vk_type_photo")],
+        [InlineKeyboardButton(text="🎥 Видео", callback_data="vk_type_video")],
+        [InlineKeyboardButton(text="📄 Документ", callback_data="vk_type_doc")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]
+    ])
+    await callback.message.answer("Выберите тип сообщения для рассылки VK:", reply_markup=kb)
+    await state.set_state(BroadcastVK.waiting_type)
+    await callback.answer()
+
+# Обработчики выбора типа
+@dp.callback_query(F.data == "vk_type_text", BroadcastVK.waiting_type)
+async def vk_type_text(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(vk_msg_type="text")
+    await callback.message.answer("Введите текст сообщения:")
     await state.set_state(BroadcastVK.waiting_text)
     await callback.answer()
 
-@dp.message(BroadcastVK.waiting_text)
-async def broadcast_vk_text(message: types.Message, state: FSMContext):
-    await state.update_data(text=message.text)
-    await message.answer("Задержка (сек):", parse_mode="HTML")
+@dp.callback_query(F.data == "vk_type_photo", BroadcastVK.waiting_type)
+async def vk_type_photo(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(vk_msg_type="photo")
+    await callback.message.answer("Пришлите фото для рассылки (можно с подписью):")
+    await state.set_state(BroadcastVK.waiting_media)
+    await callback.answer()
+
+@dp.callback_query(F.data == "vk_type_video", BroadcastVK.waiting_type)
+async def vk_type_video(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(vk_msg_type="video")
+    await callback.message.answer("Пришлите видео для рассылки (можно с подписью):")
+    await state.set_state(BroadcastVK.waiting_media)
+    await callback.answer()
+
+@dp.callback_query(F.data == "vk_type_doc", BroadcastVK.waiting_type)
+async def vk_type_doc(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(vk_msg_type="doc")
+    await callback.message.answer("Пришлите документ (файл) для рассылки (можно с подписью):")
+    await state.set_state(BroadcastVK.waiting_media)
+    await callback.answer()
+
+# Обработка загрузки медиа (фото, видео, документ)
+@dp.message(BroadcastVK.waiting_media, F.photo | F.video | F.document)
+async def vk_media_received(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    msg_type = data.get("vk_msg_type")
+    caption = message.caption
+
+    # Определяем тип файла и получаем file_id
+    if msg_type == "photo" and message.photo:
+        file_id = message.photo[-1].file_id
+        file_name = f"vk_photo_{int(time.time())}.jpg"
+    elif msg_type == "video" and message.video:
+        file_id = message.video.file_id
+        file_name = f"vk_video_{int(time.time())}.mp4"
+    elif msg_type == "doc" and message.document:
+        file_id = message.document.file_id
+        file_name = message.document.file_name or f"vk_doc_{int(time.time())}"
+    else:
+        await message.answer("❌ Неверный тип файла. Попробуйте ещё раз.")
+        return
+
+    # Сохраняем данные для последующей загрузки на сервер VK
+    await state.update_data(media_file_id=file_id, media_caption=caption, media_file_name=file_name)
+    await message.answer("Введите задержку (сек):")
     await state.set_state(BroadcastVK.waiting_delay)
 
+# Обработка текстового сообщения (если выбран тип "текст")
+@dp.message(BroadcastVK.waiting_text)
+async def broadcast_vk_text(message: types.Message, state: FSMContext):
+    await state.update_data(vk_text=message.text)
+    await message.answer("Введите задержку (сек):")
+    await state.set_state(BroadcastVK.waiting_delay)
+
+# Основная функция VK рассылки (с поддержкой медиа)
 @dp.message(BroadcastVK.waiting_delay)
 async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     raw = message.text.strip()
@@ -932,15 +1007,16 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         delay = float(raw.replace(',', '.'))
         if delay < 0.5:
             delay = 0.5
-        if delay > 5:
-            await message.answer("⚠️ Большая задержка (>5 сек) сильно замедлит рассылку. Рекомендуется 1–2 сек.")
     except ValueError:
         await message.answer("❌ Нужно число, например 2")
         return
 
     data = await state.get_data()
-    text = data["text"]
     acc_id = data["acc_id"]
+    msg_type = data.get("vk_msg_type", "text")
+    text = data.get("vk_text") if msg_type == "text" else data.get("media_caption")
+    media_file_id = data.get("media_file_id")
+    media_file_name = data.get("media_file_name")
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
@@ -981,9 +1057,55 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     await status_msg.edit_text(
         f"🚀 *Рассылка VK запущена*\n"
         f"👥 Друзей: {total}\n"
-        f"⏱️ Задержка: {delay} сек\n\n"
+        f"⏱️ Задержка: {delay} сек\n"
+        f"📎 Тип: {msg_type}\n\n"
         f"✅ Отправлено: 0/{total} (0%)"
     )
+
+    # Если нужно отправить медиа – предварительно загружаем файл
+    uploaded_media = None
+    if msg_type != "text":
+        # Скачиваем файл из Telegram
+        file = await message.bot.get_file(media_file_id)
+        file_path = f"/tmp/{media_file_name}"
+        await message.bot.download_file(file.file_path, file_path)
+
+        # Загружаем на сервер VK
+        try:
+            if msg_type == "photo":
+                upload_server = vk.photos.getMessagesUploadServer()
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    with open(file_path, 'rb') as f:
+                        files = {'photo': f}
+                        response = await session.post(upload_server['upload_url'], files=files)
+                        data = await response.json()
+                        uploaded_media = vk.photos.saveMessagesPhoto(photo=data['photo'], server=data['server'], hash=data['hash'])[0]
+                        # uploaded_media имеет поля owner_id, id
+            elif msg_type == "video":
+                # Видео загружается сложнее, но можно через uploadVideo. Упрощённо – используем документ.
+                # Для видео обычно используют документ с видеофайлом.
+                upload_server = vk.docs.getMessagesUploadServer(type='video_message')
+                async with aiohttp.ClientSession() as session:
+                    with open(file_path, 'rb') as f:
+                        files = {'file': f}
+                        response = await session.post(upload_server['upload_url'], files=files)
+                        data = await response.json()
+                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
+            elif msg_type == "doc":
+                upload_server = vk.docs.getMessagesUploadServer(type='doc')
+                async with aiohttp.ClientSession() as session:
+                    with open(file_path, 'rb') as f:
+                        files = {'file': f}
+                        response = await session.post(upload_server['upload_url'], files=files)
+                        data = await response.json()
+                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {get_russian_error(e)}")
+            os.remove(file_path)
+            await state.clear()
+            return
+        os.remove(file_path)
 
     sent = 0
     errors = 0
@@ -1017,16 +1139,22 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
     for friend_id in friends:
         try:
-            vk.messages.send(user_id=friend_id, message=text, random_id=0)
+            if msg_type == "text":
+                vk.messages.send(user_id=friend_id, message=text, random_id=0)
+            else:
+                # Формируем attachment
+                if msg_type == "photo":
+                    attachment = f"photo{uploaded_media['owner_id']}_{uploaded_media['id']}"
+                else:
+                    attachment = f"doc{uploaded_media['owner_id']}_{uploaded_media['id']}"
+                vk.messages.send(user_id=friend_id, message=text or "", random_id=0, attachment=attachment)
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
-            # Если токен умер – останавливаем рассылку
             if "invalid access_token" in err_str or "5" in err_str:
                 await status_msg.edit_text(f"❌ Аккаунт {vk_name} потерял доступ. Рассылка остановлена.")
                 await state.clear()
                 return
-            # Недоступные контакты – просто пропускаем (не увеличиваем задержку)
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
@@ -1034,7 +1162,6 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         except Exception as e:
             errors += 1
 
-        # Фиксированная задержка, даже если ошибка
         await asyncio.sleep(delay)
 
         if time.time() - last_update >= 5:
@@ -1047,7 +1174,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         f"✅ *Рассылка VK завершена*\n"
         f"📤 Отправлено: {sent}\n"
         f"❌ Ошибок: {errors}\n"
-        f"⏭️ Пропущено (недоступно): {skipped}\n"
+        f"⏭️ Пропущено: {skipped}\n"
         f"📈 Успешность: {success_rate:.1f}%\n"
         f"⏱️ Затрачено: {elapsed:.1f} сек."
     )
