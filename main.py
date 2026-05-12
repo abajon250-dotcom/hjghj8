@@ -1073,7 +1073,6 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
     # Загрузка медиа
     uploaded_media = None
     if msg_type != "text":
-        # Скачиваем файл
         file = await callback.bot.get_file(media_file_id)
         file_path = f"/tmp/{media_file_name}"
         await callback.bot.download_file(file.file_path, file_path)
@@ -1093,10 +1092,9 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                                 raise Exception(f"VK returned: {resp_data}")
                             uploaded_media = vk.photos.saveMessagesPhoto(photo=resp_data['photo'], server=resp_data['server'], hash=resp_data['hash'])[0]
             else:
-                # Документ – проверяем запрещённые расширения
                 lower_name = media_file_name.lower()
                 if lower_name.endswith('.apk') or lower_name.endswith('.exe') or lower_name.endswith('.msi'):
-                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов.")
+                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов. Используйте Telegram рассылку.")
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
@@ -1182,10 +1180,11 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
+            # ----- ОСНОВНОЕ ИЗМЕНЕНИЕ: НЕ ОСТАНАВЛИВАЕМ РАССЫЛКУ -----
             if "invalid access_token" in err_str or "5" in err_str:
-                await status_msg.edit_text(f"❌ Аккаунт {vk_name} потерял доступ. Рассылка остановлена.")
-                await state.clear()
-                return
+                errors += 1
+                logging.warning(f"Аккаунт {vk_name} потерял доступ, но рассылка продолжается.")
+                continue
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
