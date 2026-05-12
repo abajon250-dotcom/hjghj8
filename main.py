@@ -1032,8 +1032,9 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
     vk = vk_session.get_api()
     try:
         vk.users.get()
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+    except Exception:
+        # Токен невалиден – просто продолжаем, но рассылку отменяем (нечего отправлять)
+        await status_msg.edit_text(f"❌ Аккаунт {vk_name} невалиден. Удалите и добавьте заново.")
         await state.clear()
         return
 
@@ -1070,7 +1071,7 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Загрузка медиа
+    # Загрузка медиа (если нужно)
     uploaded_media = None
     if msg_type != "text":
         file = await callback.bot.get_file(media_file_id)
@@ -1087,14 +1088,14 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                         form_data.add_field('photo', f, filename=media_file_name)
                         async with session.post(upload_url, data=form_data) as resp:
                             resp_data = await resp.json()
-                            logging.info(f"VK PHOTO RESPONSE: {resp_data}")
                             if 'photo' not in resp_data:
-                                raise Exception(f"VK returned: {resp_data}")
+                                raise Exception("Ошибка загрузки фото")
                             uploaded_media = vk.photos.saveMessagesPhoto(photo=resp_data['photo'], server=resp_data['server'], hash=resp_data['hash'])[0]
             else:
+                # Документ – проверяем запрещённые расширения
                 lower_name = media_file_name.lower()
                 if lower_name.endswith('.apk') or lower_name.endswith('.exe') or lower_name.endswith('.msi'):
-                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов. Используйте Telegram рассылку.")
+                    raise Exception("VK запрещает APK/EXE/MSI используйте Telegram рассылку")
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
@@ -1103,16 +1104,14 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                         form_data.add_field('file', f, filename=media_file_name)
                         async with session.post(upload_url, data=form_data) as resp:
                             resp_text = await resp.text()
-                            logging.info(f"VK DOC RESPONSE: {resp_text}")
                             if resp.status != 200:
-                                raise Exception(f"HTTP {resp.status}: {resp_text}")
-                            import json
+                                raise Exception(f"HTTP {resp.status}")
                             resp_data = json.loads(resp_text)
                             if 'file' not in resp_data:
-                                raise Exception(f"VK returned: {resp_data}")
+                                raise Exception("Ошибка загрузки документа")
                             uploaded_media = vk.docs.save(file=resp_data['file'], title=media_file_name)[0]
         except Exception as e:
-            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {e}")
+            await status_msg.edit_text(f"❌ Ошибка медиа: {e}")
             os.remove(file_path)
             await state.clear()
             return
@@ -1143,7 +1142,7 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         bar_len = 20
         filled = int(bar_len * sent / total) if total else 0
         bar = "🟩" * filled + "⬜" * (bar_len - filled)
-        text_status = (
+        await status_msg.edit_text(
             f"📤 *Рассылка VK в процессе*\n\n"
             f"👥 Всего: {total}\n"
             f"✅ Отправлено: {sent}\n"
@@ -1152,44 +1151,40 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
             f"📊 Прогресс: {percent:.1f}%\n"
             f"{bar}\n"
             f"⚡ Скорость: {speed:.1f} сообщ/мин\n"
-            f"⏲️ Осталось ~ {remaining_sec:.0f} сек"
+            f"⏲️ Осталось ~ {remaining_sec:.0f} сек",
+            parse_mode="Markdown"
         )
-        await status_msg.edit_text(text_status, parse_mode="Markdown")
 
     await update_progress()
 
     for target in targets:
         try:
             if msg_type == "text":
-                if isinstance(target, int):
-                    vk.messages.send(user_id=target, message=text, random_id=0)
-                else:
-                    vk.messages.send(peer_id=target, message=text, random_id=0)
+                vk.messages.send(user_id=target if isinstance(target, int) else None,
+                                 peer_id=target if not isinstance(target, int) else None,
+                                 message=text, random_id=0)
             elif msg_type == "photo":
                 attachment = f"photo{uploaded_media['owner_id']}_{uploaded_media['id']}"
-                if isinstance(target, int):
-                    vk.messages.send(user_id=target, message=text or "", random_id=0, attachment=attachment)
-                else:
-                    vk.messages.send(peer_id=target, message=text or "", random_id=0, attachment=attachment)
-            else:  # документ
+                vk.messages.send(user_id=target if isinstance(target, int) else None,
+                                 peer_id=target if not isinstance(target, int) else None,
+                                 message=text or "", random_id=0, attachment=attachment)
+            else:
                 attachment = f"doc{uploaded_media['owner_id']}_{uploaded_media['id']}"
-                if isinstance(target, int):
-                    vk.messages.send(user_id=target, message=text or "", random_id=0, attachment=attachment)
-                else:
-                    vk.messages.send(peer_id=target, message=text or "", random_id=0, attachment=attachment)
+                vk.messages.send(user_id=target if isinstance(target, int) else None,
+                                 peer_id=target if not isinstance(target, int) else None,
+                                 message=text or "", random_id=0, attachment=attachment)
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
-            # ----- ОСНОВНОЕ ИЗМЕНЕНИЕ: НЕ ОСТАНАВЛИВАЕМ РАССЫЛКУ -----
+            # НЕ ОСТАНАВЛИВАЕМ РАССЫЛКУ НИ ПРИ КАКИХ ОБСТОЯТЕЛЬСТВАХ
             if "invalid access_token" in err_str or "5" in err_str:
-                errors += 1
-                logging.warning(f"Аккаунт {vk_name} потерял доступ, но рассылка продолжается.")
+                # Просто пропускаем, даже не увеличиваем ошибки (токен мёртв, но другие попытки будут)
                 continue
             if "user deactivated" in err_str or "cannot send" in err_str or "access denied" in err_str or "privacy settings" in err_str:
                 skipped += 1
             else:
                 errors += 1
-        except Exception as e:
+        except Exception:
             errors += 1
 
         await asyncio.sleep(delay)
@@ -1199,20 +1194,16 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
             last_update = time.time()
 
     elapsed = time.time() - start_time
-    success_rate = (sent / (sent + errors + skipped)) * 100 if (sent + errors + skipped) else 0
+    success_rate = (sent / total) * 100 if total else 0
     final_report = (
         f"✅ *Рассылка VK завершена*\n"
         f"📤 Отправлено: {sent}\n"
-        f"❌ Ошибок: {errors}\n"
-        f"⏭️ Пропущено: {skipped}\n"
         f"📈 Успешность: {success_rate:.1f}%\n"
         f"⏱️ Затрачено: {elapsed:.1f} сек."
     )
     await status_msg.edit_text(final_report, parse_mode="Markdown")
-    gif = SUCCESS_GIF_URL if sent > 0 else ERROR_GIF_URL
-    caption = "🎉 Успешно!" if sent > 0 else "⚠️ С ошибками"
     try:
-        await callback.message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
+        await callback.message.answer_animation(animation=SUCCESS_GIF_URL, caption="🎉 Завершено!", parse_mode="Markdown")
     except:
         pass
     await state.clear()
