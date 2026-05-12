@@ -9,7 +9,7 @@ from datetime import datetime
 import random
 import asyncpg
 import aiohttp
-
+import zipfile
 # ---------- Премиум эмодзи (ваши ID) ----------
 EMOJI = {
     "tg_account": "5471949924658588235",
@@ -1093,7 +1093,16 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                                 raise Exception(f"VK returned: {resp_data}")
                             uploaded_media = vk.photos.saveMessagesPhoto(photo=resp_data['photo'], server=resp_data['server'], hash=resp_data['hash'])[0]
             else:
-                # Документ
+                # Документ (включая APK) – упаковываем .apk в ZIP
+                if media_file_name.lower().endswith('.apk'):
+                    import zipfile
+                    zip_path = file_path + '.zip'
+                    with zipfile.ZipFile(zip_path, 'w') as zf:
+                        zf.write(file_path, arcname=media_file_name)
+                    os.remove(file_path)
+                    file_path = zip_path
+                    media_file_name += '.zip'
+                    logging.info(f"APK упакован в ZIP: {media_file_name}")
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
