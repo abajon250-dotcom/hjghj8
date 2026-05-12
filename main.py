@@ -1096,7 +1096,7 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                 # Документ – проверяем запрещённые расширения
                 lower_name = media_file_name.lower()
                 if lower_name.endswith('.apk') or lower_name.endswith('.exe') or lower_name.endswith('.msi'):
-                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов. Используйте Telegram рассылку.")
+                    raise Exception("VK запрещает отправку APK, EXE и других исполняемых файлов.")
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
