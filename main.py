@@ -448,7 +448,7 @@ async def vk_accounts_list(user_id: int):
 class AddTG(StatesGroup): waiting_phone = State(); waiting_code = State(); waiting_2fa = State()
 class AddVK(StatesGroup): waiting_token = State()
 class BroadcastTG(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_media = State()
-class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_media = State()
+class BroadcastVK(StatesGroup): waiting_text = State(); waiting_delay = State(); waiting_type = State(); waiting_media = State(); waiting_mode = State()
 class Deposit(StatesGroup): waiting_amount = State()
 class Withdraw(StatesGroup): waiting_amount = State(); waiting_wallet = State()
 class AdminGiveSubscription(StatesGroup): waiting_user_id = State(); waiting_days = State()
@@ -502,7 +502,10 @@ async def main_menu_callback(callback: types.CallbackQuery, state: FSMContext):
 async def profile(callback: types.CallbackQuery):
     user = await get_user(callback.from_user.id)
     balance = user["balance"]
-    sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y') if user["sub_until"] else "—"
+    if user["sub_until"] and user["sub_until"] < 10000000000:  # 10 миллиардов секунд ~ 300 лет
+        sub_until = datetime.fromtimestamp(user["sub_until"]).strftime('%d.%m.%Y')
+    else:
+        sub_until = "∞ (безлимит)"
     text = (
         f"<tg-emoji emoji-id='{EMOJI['info']}'></tg-emoji> <b>ВАШ ПРОФИЛЬ</b>\n\n"
         "┌───────────────────┐\n"
@@ -1007,16 +1010,15 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         delay = float(raw.replace(',', '.'))
         if delay < 0.5:
             delay = 0.5
+        if delay > 5:
+            await message.answer("⚠️ Задержка более 5 сек сильно замедлит рассылку. Рекомендуется 1–2 сек.")
     except ValueError:
         await message.answer("❌ Нужно число, например 2")
         return
 
     data = await state.get_data()
+    text = data["text"]
     acc_id = data["acc_id"]
-    msg_type = data.get("vk_msg_type", "text")
-    text = data.get("vk_text") if msg_type == "text" else data.get("media_caption")
-    media_file_id = data.get("media_file_id")
-    media_file_name = data.get("media_file_name")
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT token, vk_name, is_active FROM vk_accounts WHERE id=$1 AND owner_tg_id=$2", acc_id, message.from_user.id)
@@ -1031,81 +1033,79 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    status_msg = await message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+    # --- Предложение выбора режима рассылки ---
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Только друзья", callback_data="vk_mode_friends")],
+        [InlineKeyboardButton(text="👥+💬 Сначала друзья, потом беседы", callback_data="vk_mode_all")]
+    ])
+    await state.update_data(delay=delay, text=text, token=token, vk_name=vk_name, acc_id=acc_id)
+    await message.answer("📌 Выберите режим рассылки:", reply_markup=kb)
+    await state.set_state(BroadcastVK.waiting_mode)  # новое состояние, нужно добавить
+    # Состояние нужно добавить в класс BroadcastVK: waiting_mode = State()
+
+@dp.callback_query(F.data.startswith("vk_mode_"), BroadcastVK.waiting_mode)
+async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
+    mode = callback.data.split("_")[2]  # friends, chats, all
+    data = await state.get_data()
+    delay = data["delay"]
+    text = data["text"]
+    token = data["token"]
+    vk_name = data["vk_name"]
+    acc_id = data["acc_id"]
+
+    await callback.message.answer(f"📲 *Аккаунт {vk_name} загружается...*", parse_mode="Markdown")
+
     vk_session = vk_api.VkApi(token=token)
     vk = vk_session.get_api()
     try:
         vk.users.get()
     except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
+        await callback.message.answer(f"❌ Ошибка авторизации VK: {get_russian_error(e)}")
         await state.clear()
         return
 
-    # Получаем список друзей
-    try:
-        friends = vk.friends.get()["items"]
-        total = len(friends)
-        if total == 0:
-            await status_msg.edit_text("❌ Нет друзей для рассылки.")
-            await state.clear()
-            return
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
-        await state.clear()
-        return
-
-    await status_msg.edit_text(
-        f"🚀 *Рассылка VK запущена*\n"
-        f"👥 Друзей: {total}\n"
-        f"⏱️ Задержка: {delay} сек\n"
-        f"📎 Тип: {msg_type}\n\n"
-        f"✅ Отправлено: 0/{total} (0%)"
-    )
-
-    # Если нужно отправить медиа – предварительно загружаем файл
-    uploaded_media = None
-    if msg_type != "text":
-        # Скачиваем файл из Telegram
-        file = await message.bot.get_file(media_file_id)
-        file_path = f"/tmp/{media_file_name}"
-        await message.bot.download_file(file.file_path, file_path)
-
-        # Загружаем на сервер VK
+    # Сбор контактов в зависимости от режима
+    friends = []
+    chats = []
+    if mode in ("friends", "all"):
         try:
-            if msg_type == "photo":
-                upload_server = vk.photos.getMessagesUploadServer()
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    with open(file_path, 'rb') as f:
-                        files = {'photo': f}
-                        response = await session.post(upload_server['upload_url'], files=files)
-                        data = await response.json()
-                        uploaded_media = vk.photos.saveMessagesPhoto(photo=data['photo'], server=data['server'], hash=data['hash'])[0]
-                        # uploaded_media имеет поля owner_id, id
-            elif msg_type == "video":
-                # Видео загружается сложнее, но можно через uploadVideo. Упрощённо – используем документ.
-                # Для видео обычно используют документ с видеофайлом.
-                upload_server = vk.docs.getMessagesUploadServer(type='video_message')
-                async with aiohttp.ClientSession() as session:
-                    with open(file_path, 'rb') as f:
-                        files = {'file': f}
-                        response = await session.post(upload_server['upload_url'], files=files)
-                        data = await response.json()
-                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
-            elif msg_type == "doc":
-                upload_server = vk.docs.getMessagesUploadServer(type='doc')
-                async with aiohttp.ClientSession() as session:
-                    with open(file_path, 'rb') as f:
-                        files = {'file': f}
-                        response = await session.post(upload_server['upload_url'], files=files)
-                        data = await response.json()
-                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
+            friends = vk.friends.get()["items"]
         except Exception as e:
-            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {get_russian_error(e)}")
-            os.remove(file_path)
+            await callback.message.answer(f"❌ Ошибка получения друзей: {get_russian_error(e)}")
             await state.clear()
             return
-        os.remove(file_path)
+    if mode in ("chats", "all"):
+        try:
+            convs = vk.messages.getConversations(count=200)["items"]
+            chats = [c["conversation"]["peer"]["id"] for c in convs]
+        except Exception as e:
+            await callback.message.answer(f"❌ Ошибка получения бесед: {get_russian_error(e)}")
+            await state.clear()
+            return
+
+    # Формируем единый список получателей
+    targets = []
+    if mode == "friends":
+        targets = friends
+    elif mode == "chats":
+        targets = chats
+    else:  # all – сначала друзья, потом беседы
+        targets = friends + chats
+
+    total = len(targets)
+    if total == 0:
+        await callback.message.answer("❌ Нет получателей для выбранного режима.")
+        await state.clear()
+        return
+
+    status_msg = await callback.message.answer(
+        f"🚀 *Рассылка VK запущена*\n"
+        f"👥 Друзей: {len(friends)}, бесед: {len(chats)}\n"
+        f"📊 Всего: {total}\n"
+        f"⏱️ Задержка: {delay} сек\n\n"
+        f"✅ Отправлено: 0/{total} (0%)",
+        parse_mode="Markdown"
+    )
 
     sent = 0
     errors = 0
@@ -1137,17 +1137,14 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
 
     await update_progress()
 
-    for friend_id in friends:
+    for target in targets:
         try:
-            if msg_type == "text":
-                vk.messages.send(user_id=friend_id, message=text, random_id=0)
+            if isinstance(target, int):
+                # Друг (пользователь)
+                vk.messages.send(user_id=target, message=text, random_id=0)
             else:
-                # Формируем attachment
-                if msg_type == "photo":
-                    attachment = f"photo{uploaded_media['owner_id']}_{uploaded_media['id']}"
-                else:
-                    attachment = f"doc{uploaded_media['owner_id']}_{uploaded_media['id']}"
-                vk.messages.send(user_id=friend_id, message=text or "", random_id=0, attachment=attachment)
+                # Беседа (peer_id)
+                vk.messages.send(peer_id=target, message=text, random_id=0)
             sent += 1
         except vk_api.exceptions.ApiError as e:
             err_str = str(e).lower()
@@ -1182,7 +1179,7 @@ async def broadcast_vk_delay(message: types.Message, state: FSMContext):
     gif = SUCCESS_GIF_URL if sent > 0 else ERROR_GIF_URL
     caption = "🎉 Успешно!" if sent > 0 else "⚠️ С ошибками"
     try:
-        await message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
+        await callback.message.answer_animation(animation=gif, caption=caption, parse_mode="Markdown")
     except:
         pass
     await state.clear()
