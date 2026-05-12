@@ -1037,7 +1037,7 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Сбор контактов
+    # Сбор контактов (друзья и/или беседы)
     friends = []
     chats = []
     if mode in ("friends", "all"):
@@ -1070,7 +1070,8 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Загрузка медиа, если нужно
+    # Загрузка медиа (если не текст)
+    # Загрузка медиа
     uploaded_media = None
     if msg_type != "text":
         file = await callback.bot.get_file(media_file_id)
@@ -1085,22 +1086,32 @@ async def vk_mode_choice(callback: types.CallbackQuery, state: FSMContext):
                     with open(file_path, 'rb') as f:
                         form_data = aiohttp.FormData()
                         form_data.add_field('photo', f, filename=media_file_name)
-                        response = await session.post(upload_url, data=form_data)
-                        data = await response.json()
-                        uploaded_media = vk.photos.saveMessagesPhoto(photo=data['photo'], server=data['server'], hash=data['hash'])[0]
+                        async with session.post(upload_url, data=form_data) as resp:
+                            resp_data = await resp.json()
+                            logging.info(f"VK PHOTO RESPONSE: {resp_data}")
+                            if 'photo' not in resp_data:
+                                raise Exception(f"VK returned: {resp_data}")
+                            uploaded_media = vk.photos.saveMessagesPhoto(photo=resp_data['photo'], server=resp_data['server'], hash=resp_data['hash'])[0]
             else:
-                # Документы (включая видео, APK, любые файлы)
+                # Документ
                 upload_server = vk.docs.getMessagesUploadServer(type='doc')
                 upload_url = upload_server['upload_url']
                 async with aiohttp.ClientSession() as session:
                     with open(file_path, 'rb') as f:
                         form_data = aiohttp.FormData()
                         form_data.add_field('file', f, filename=media_file_name)
-                        response = await session.post(upload_url, data=form_data)
-                        data = await response.json()
-                        uploaded_media = vk.docs.save(file=data['file'], title=media_file_name)[0]
+                        async with session.post(upload_url, data=form_data) as resp:
+                            resp_text = await resp.text()
+                            logging.info(f"VK DOC RESPONSE: {resp_text}")
+                            if resp.status != 200:
+                                raise Exception(f"HTTP {resp.status}: {resp_text}")
+                            import json
+                            resp_data = json.loads(resp_text)
+                            if 'file' not in resp_data:
+                                raise Exception(f"VK returned: {resp_data}")
+                            uploaded_media = vk.docs.save(file=resp_data['file'], title=media_file_name)[0]
         except Exception as e:
-            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {get_russian_error(e)}")
+            await status_msg.edit_text(f"❌ Ошибка загрузки медиа: {e}")
             os.remove(file_path)
             await state.clear()
             return
